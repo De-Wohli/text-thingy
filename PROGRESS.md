@@ -21,13 +21,14 @@ The full stack described in `outline.md` (Go gateway/worker, RabbitMQ, Redis, Po
 - RabbitMQ/Redis pub/sub wiring (dungeon generation round-trip, vote resolution round-trip) is implemented per the design but only reasoned through, not exercised against running brokers.
 
 ### Blocked / needs user action
-- **Docker is not installed** in this environment and `sudo` requires an interactive password prompt this agent can't supply. The user needs to run, in a real terminal:
+- **Docker CLI is installed but the daemon isn't running** (`systemctl is-active docker` → `inactive`), and the current user isn't in the `docker` group yet. `sudo` requires an interactive password prompt this agent can't supply. Run in a real terminal:
   ```
-  sudo pacman -S --needed docker docker-compose
   sudo systemctl enable --now docker
   sudo usermod -aG docker $USER   # then log out/in or `newgrp docker`
   ```
-  Once installed, `docker compose up --build` from the repo root will actually exercise the full stack for the first time.
+  Once that's done, `docker compose up --build` from the repo root will actually exercise the full stack for the first time.
+- **`git push` has no credentials in this agent's shell** — `PROGRESS.md`'s own addition is committed locally on `main` but unpushed as of this writing. Run `git push` from a terminal with your GitHub auth available.
+- **`gh` was installed but isn't on this shell's PATH** — a fresh terminal may pick it up; if not, check how it was installed (e.g. needs `~/.local/bin` or similar on `$PATH`). Run `gh auth login` once it resolves so CI status/PR work can be checked from the CLI going forward.
 
 ## Architecture snapshot
 
@@ -58,6 +59,10 @@ See `README.md` for the full breakdown. Quick summary:
 - Verified frontend independently (lint/typecheck/test/build all green).
 - Initialized git, committed (73 files), user pushed to `https://github.com/De-Wohli/text-thingy`.
 - Created this file per user request to track ongoing progress across sessions.
+
+### 2026-06-30 — Docker/gh follow-up
+- User installed Docker and `gh`. Confirmed `docker`/`docker-compose` CLIs are now present, but the daemon is inactive and the user isn't in the `docker` group yet — both need one interactive `sudo` round-trip the agent can't do non-interactively. `gh` isn't resolving on `$PATH` in this shell yet.
+- `git push` still fails in this shell (no credential helper available here) — the `PROGRESS.md` commit is local-only on `main` until the user pushes it themselves.
 
 ## Next steps (suggested, not started)
 1. User installs Docker, runs `docker compose up --build`, confirms the stack actually comes up and the frontend can create an account / move around.
