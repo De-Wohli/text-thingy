@@ -27,8 +27,9 @@ The full stack described in `outline.md` (Go gateway/worker, RabbitMQ, Redis, Po
   sudo usermod -aG docker $USER   # then log out/in or `newgrp docker`
   ```
   Once that's done, `docker compose up --build` from the repo root will actually exercise the full stack for the first time.
-- **`git push` has no credentials in this agent's shell** — `PROGRESS.md`'s own addition is committed locally on `main` but unpushed as of this writing. Run `git push` from a terminal with your GitHub auth available.
 - **`gh` was installed but isn't on this shell's PATH** — a fresh terminal may pick it up; if not, check how it was installed (e.g. needs `~/.local/bin` or similar on `$PATH`). Run `gh auth login` once it resolves so CI status/PR work can be checked from the CLI going forward.
+
+~~`git push` has no credentials~~ — resolved: switched `origin` to the SSH remote (`git@github.com:De-Wohli/text-thingy.git`), reusing the user's existing `~/.ssh/id_ed25519` key already registered with GitHub. Pushing now works directly from this agent's shell.
 
 ## Architecture snapshot
 
