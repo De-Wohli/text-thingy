@@ -41,8 +41,28 @@ func TestBossRoomUsesBossTierMonsters(t *testing.T) {
 			t.Fatal("expected at least one boss monster")
 		}
 		for _, m := range e.Monsters {
-			if m.ChallengeRating < 1 {
-				t.Fatalf("boss monster %s has CR %.2f, expected >= 1", m.Name, m.ChallengeRating)
+			// Boss-tier monsters are tuned below their real SRD CR for solo
+			// play (see BossMonsters' doc comment) but should still be
+			// tougher than the regular low-CR encounter pool.
+			if m.ChallengeRating < 0.5 {
+				t.Fatalf("boss monster %s has CR %.2f, expected >= 0.5", m.Name, m.ChallengeRating)
+			}
+		}
+	}
+}
+
+func TestHallwayAndTreasureRoomsNeverEmpty(t *testing.T) {
+	// Regression: the original generator picked one random monster and
+	// immediately bailed if it didn't fit the budget, which could leave
+	// hallway/treasure with zero monsters ~1/3 of the time. Run many
+	// generations to catch that probabilistically.
+	for i := 0; i < 200; i++ {
+		d := Generate("d5", "party-1", 1)
+		for _, e := range d.Encounters {
+			if e.RoomType == models.RoomHallway || e.RoomType == models.RoomTreasure {
+				if len(e.Monsters) == 0 {
+					t.Fatalf("%s room had zero monsters on iteration %d", e.RoomType, i)
+				}
 			}
 		}
 	}

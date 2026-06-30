@@ -131,6 +131,26 @@ func (s *Store) ListCharacters(ctx context.Context, accountID string) ([]models.
 	return characters, rows.Err()
 }
 
+func (s *Store) GetCharacter(ctx context.Context, characterID string) (models.Character, error) {
+	var c models.Character
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id, account_id, name, race_id, class_id, level, status, hp_current, hp_max,
+		       ability_str, ability_dex, ability_con, ability_int, ability_wis, ability_cha, created_at
+		FROM characters WHERE id = $1
+	`, characterID).Scan(&c.ID, &c.AccountID, &c.Name, &c.RaceID, &c.ClassID, &c.Level, &c.Status,
+		&c.HPCurrent, &c.HPMax, &c.AbilityScores.Str, &c.AbilityScores.Dex, &c.AbilityScores.Con,
+		&c.AbilityScores.Int, &c.AbilityScores.Wis, &c.AbilityScores.Cha, &c.CreatedAt)
+	if err != nil {
+		return models.Character{}, fmt.Errorf("get character: %w", err)
+	}
+	return c, nil
+}
+
+func (s *Store) UpdateCharacterHP(ctx context.Context, characterID string, hpCurrent int) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE characters SET hp_current = $2 WHERE id = $1`, characterID, hpCurrent)
+	return err
+}
+
 func (s *Store) SaveDungeon(ctx context.Context, d models.Dungeon) error {
 	grid, err := json.Marshal(d.Grid)
 	if err != nil {

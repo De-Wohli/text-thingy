@@ -10,9 +10,20 @@ import (
 	"dnd5e-web/backend/internal/models"
 )
 
-// buildCharacter mirrors frontend/src/engine/account.ts createCharacter: base
-// ability scores of 10, race bonuses applied, HP derived from the class hit
-// die plus the Constitution modifier. Keep the two in sync.
+// standardArrayByClass assigns the 5e "standard array" (15, 14, 13, 12, 10,
+// 8) to abilities by class priority, before racial bonuses — this is what
+// makes a level-1 Fighter actually combat-viable (internal/combat rolls
+// against these numbers) rather than the flat 10-across-the-board a
+// placeholder chargen would produce.
+var standardArrayByClass = map[models.ClassID]models.AbilityScores{
+	models.ClassFighter: {Str: 15, Dex: 13, Con: 14, Int: 8, Wis: 12, Cha: 10},
+	models.ClassWizard:  {Str: 8, Dex: 13, Con: 14, Int: 15, Wis: 12, Cha: 10},
+}
+
+// buildCharacter mirrors frontend/src/engine/account.ts createCharacter:
+// standard-array ability scores by class, race bonuses applied on top, HP
+// derived from the class hit die plus the Constitution modifier. Keep the
+// two in sync.
 func buildCharacter(accountID, name string, raceID models.RaceID, classID models.ClassID) (models.Character, error) {
 	race, ok := models.Races[raceID]
 	if !ok {
@@ -27,7 +38,10 @@ func buildCharacter(accountID, name string, raceID models.RaceID, classID models
 		return models.Character{}, fmt.Errorf("character name is required")
 	}
 
-	scores := models.AbilityScores{Str: 10, Dex: 10, Con: 10, Int: 10, Wis: 10, Cha: 10}
+	scores, ok := standardArrayByClass[classID]
+	if !ok {
+		scores = models.AbilityScores{Str: 10, Dex: 10, Con: 10, Int: 10, Wis: 10, Cha: 10}
+	}
 	for ability, bonus := range race.AbilityBonuses {
 		switch ability {
 		case "str":
@@ -45,8 +59,7 @@ func buildCharacter(accountID, name string, raceID models.RaceID, classID models
 		}
 	}
 
-	conModifier := floorDiv(scores.Con-10, 2)
-	maxHP := class.HitDie + conModifier
+	maxHP := class.HitDie + models.AbilityModifier(scores.Con)
 
 	return models.Character{
 		ID:            uuid.NewString(),
@@ -61,14 +74,4 @@ func buildCharacter(accountID, name string, raceID models.RaceID, classID models
 		AbilityScores: scores,
 		CreatedAt:     time.Now(),
 	}, nil
-}
-
-// floorDiv divides toward negative infinity, matching JS's Math.floor(a/b)
-// semantics used on the frontend for ability modifiers.
-func floorDiv(a, b int) int {
-	q := a / b
-	if (a%b != 0) && ((a < 0) != (b < 0)) {
-		q--
-	}
-	return q
 }

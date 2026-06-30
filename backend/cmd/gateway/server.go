@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 
@@ -47,6 +48,40 @@ func partyKey(account models.Account) string {
 		return *account.PartyID
 	}
 	return account.ID
+}
+
+// sendNarration delivers a Game-Master-voiced line to whoever should see it
+// — the triggering account when solo, the whole party otherwise — as a
+// regular chat message on the "narrator" channel, so it's both shown
+// inline by the caller (most handlers also embed the same text in their
+// response payload) and kept in the persistent chat log.
+func (s *server) sendNarration(accountID, partyID, body string) {
+	msg := models.ChatMessage{
+		Channel:   models.ChannelNarrator,
+		AccountID: "narrator",
+		Name:      "Game Master",
+		Body:      body,
+		Timestamp: time.Now(),
+	}
+	broadcast := wsproto.NewChatBroadcast(msg)
+	if partyID != "" {
+		s.hub.BroadcastToParty(partyID, broadcast)
+	} else {
+		s.hub.SendTo(accountID, broadcast)
+	}
+}
+
+// activeCharacterName looks up the account's active character for
+// narration purposes, falling back to a generic label if none is set.
+func (s *server) activeCharacterName(ctx context.Context, account models.Account) string {
+	if account.ActiveCharacterID == nil {
+		return "The adventurer"
+	}
+	c, err := s.store.GetCharacter(ctx, *account.ActiveCharacterID)
+	if err != nil {
+		return "The adventurer"
+	}
+	return c.Name
 }
 
 func (s *server) stateSync(ctx context.Context, accountID string) (wsproto.StateSync, error) {

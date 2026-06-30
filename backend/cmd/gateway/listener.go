@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 
+	"dnd5e-web/backend/internal/narrator"
 	"dnd5e-web/backend/internal/redisstate"
 	"dnd5e-web/backend/internal/wsproto"
 )
@@ -71,12 +72,19 @@ func (s *server) listenDungeonReady(ctx context.Context) {
 		s.dungeons[key] = &d
 		s.dungeonsMu.Unlock()
 
-		ready := wsproto.NewDungeonReady(event.Dungeon)
+		characterName := "The adventurer"
+		if account, err := s.store.GetAccount(ctx, event.AccountID); err == nil {
+			characterName = s.activeCharacterName(ctx, account)
+		}
+		line := narrator.DungeonEntry(characterName)
+
+		ready := wsproto.NewDungeonReady(event.Dungeon, line)
 		if event.PartyID != "" {
 			s.hub.BroadcastToParty(event.PartyID, ready)
 		} else {
 			s.hub.SendTo(event.AccountID, ready)
 		}
+		s.sendNarration(event.AccountID, event.PartyID, line)
 	}
 }
 
@@ -89,6 +97,18 @@ func (s *server) listenVoteResolved(ctx context.Context) {
 			log.Printf("listener vote:resolved: decode: %v", err)
 			continue
 		}
+		optionLabel := event.OptionID
+		typology := ""
+		if prompt, ok := npcPrompts[event.PromptID]; ok {
+			for _, o := range prompt.Options {
+				if o.ID == event.OptionID {
+					optionLabel = o.Label
+					typology = string(o.Typology)
+				}
+			}
+		}
+		line := narrator.VoteResolution(optionLabel, typology, event.TieBreak)
+
 		for _, result := range event.Results {
 			s.hub.SendTo(result.AccountID, wsproto.VoteResolved{
 				Type:       "VOTE_RESOLVED",
@@ -97,7 +117,9 @@ func (s *server) listenVoteResolved(ctx context.Context) {
 				HonorDelta: result.HonorDelta,
 				NewHonor:   result.NewHonor,
 				TieBreak:   event.TieBreak,
+				Narration:  line,
 			})
+			s.sendNarration(result.AccountID, "", line)
 		}
 	}
 }

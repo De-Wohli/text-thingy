@@ -1,6 +1,7 @@
 // Mirrors backend/internal/wsproto/protocol.go — keep both in sync.
 import type {
   Account,
+  AttackRoll,
   ChatChannel,
   ChatMessage,
   ChoiceMode,
@@ -46,6 +47,7 @@ export type ChoiceStateMessage = {
   mode: ChoiceMode
   options: ChoiceOption[]
   deadline?: number // unix millis, party mode only
+  narration?: string
 }
 
 export type VoteUpdateMessage = {
@@ -61,11 +63,32 @@ export type VoteResolvedMessage = {
   honorDelta: number
   newHonor: number
   tieBreak: boolean
+  narration?: string
 }
 
 export type DungeonReadyMessage = {
   type: 'DUNGEON_READY'
   dungeon: Dungeon
+  narration?: string
+}
+
+// Sent after CLEAR_DUNGEON_ROOM actually fights the encounter — carries the
+// full attack-by-attack log so the UI can render a combat log.
+export type RoomResolvedMessage = {
+  type: 'ROOM_RESOLVED'
+  roomType: DungeonRoomType
+  victory: boolean
+  combatLog: AttackRoll[]
+  narration: string
+  dungeon: Dungeon
+}
+
+// Tells the client the instance is fully cleared and it's safe to close the
+// dungeon view and return to the overworld.
+export type DungeonResolvedMessage = {
+  type: 'DUNGEON_RESOLVED'
+  narration: string
+  goldAwarded: number
 }
 
 export type ErrorMessage = {
@@ -80,4 +103,6 @@ export type InboundMessage =
   | VoteUpdateMessage
   | VoteResolvedMessage
   | DungeonReadyMessage
+  | RoomResolvedMessage
+  | DungeonResolvedMessage
   | ErrorMessage

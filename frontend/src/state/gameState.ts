@@ -1,4 +1,4 @@
-import type { Account, ChatChannel, ChatMessage, ChoiceMode, ChoiceOption, Dungeon } from '../engine/types'
+import type { AttackRoll, Account, ChatChannel, ChatMessage, ChoiceMode, ChoiceOption, Dungeon, DungeonRoomType } from '../engine/types'
 import type { Character } from '../engine/types'
 import type { ConnectionStatus } from '../ws/client'
 
@@ -10,6 +10,7 @@ export type ChoiceState = {
   mode: ChoiceMode
   options: ChoiceOption[]
   deadline?: number
+  narration?: string
 }
 
 export type VoteResolution = {
@@ -17,6 +18,14 @@ export type VoteResolution = {
   honorDelta: number
   newHonor: number
   tieBreak: boolean
+  narration?: string
+}
+
+export type RoomResolution = {
+  roomType: DungeonRoomType
+  victory: boolean
+  combatLog: AttackRoll[]
+  narration: string
 }
 
 export type GameState = {
@@ -30,6 +39,8 @@ export type GameState = {
   voteTallies: Record<string, number> | null
   voteResolution: VoteResolution | null
   activeDungeon: Dungeon | null
+  dungeonEntryNarration: string | null
+  lastRoomResolution: RoomResolution | null
   lastMessage: string | null
 }
 
@@ -47,6 +58,8 @@ export function createInitialState(): GameState {
     voteTallies: null,
     voteResolution: null,
     activeDungeon: null,
+    dungeonEntryNarration: null,
+    lastRoomResolution: null,
     lastMessage: null,
   }
 }

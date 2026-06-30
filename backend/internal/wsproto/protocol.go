@@ -6,6 +6,7 @@ package wsproto
 import (
 	"encoding/json"
 
+	"dnd5e-web/backend/internal/combat"
 	"dnd5e-web/backend/internal/models"
 )
 
@@ -75,12 +76,13 @@ func NewChatBroadcast(msg models.ChatMessage) ChatBroadcast {
 }
 
 type ChoiceState struct {
-	Type     string                `json:"type"`
-	PromptID string                `json:"promptId"`
-	Prompt   string                `json:"prompt"`
-	Mode     models.ChoiceMode     `json:"mode"`
-	Options  []models.ChoiceOption `json:"options"`
-	Deadline *int64                `json:"deadline,omitempty"` // unix millis, party mode only
+	Type      string                `json:"type"`
+	PromptID  string                `json:"promptId"`
+	Prompt    string                `json:"prompt"`
+	Mode      models.ChoiceMode     `json:"mode"`
+	Options   []models.ChoiceOption `json:"options"`
+	Deadline  *int64                `json:"deadline,omitempty"` // unix millis, party mode only
+	Narration string                `json:"narration,omitempty"`
 }
 
 type VoteUpdate struct {
@@ -96,15 +98,37 @@ type VoteResolved struct {
 	HonorDelta int    `json:"honorDelta"`
 	NewHonor   int    `json:"newHonor"`
 	TieBreak   bool   `json:"tieBreak"`
+	Narration  string `json:"narration,omitempty"`
 }
 
 type DungeonReady struct {
-	Type    string         `json:"type"`
-	Dungeon models.Dungeon `json:"dungeon"`
+	Type      string         `json:"type"`
+	Dungeon   models.Dungeon `json:"dungeon"`
+	Narration string         `json:"narration,omitempty"`
 }
 
-func NewDungeonReady(d models.Dungeon) DungeonReady {
-	return DungeonReady{Type: "DUNGEON_READY", Dungeon: d}
+func NewDungeonReady(d models.Dungeon, narration string) DungeonReady {
+	return DungeonReady{Type: "DUNGEON_READY", Dungeon: d, Narration: narration}
+}
+
+// RoomResolved is sent after CLEAR_DUNGEON_ROOM actually fights the
+// encounter (see internal/combat) — it carries the full attack-by-attack
+// log so the client can render a combat log, not just a before/after state.
+type RoomResolved struct {
+	Type      string                 `json:"type"`
+	RoomType  models.DungeonRoomType `json:"roomType"`
+	Victory   bool                   `json:"victory"`
+	CombatLog []combat.AttackRoll    `json:"combatLog"`
+	Narration string                 `json:"narration"`
+	Dungeon   models.Dungeon         `json:"dungeon"`
+}
+
+// DungeonResolved tells the client the instance is fully cleared and it's
+// safe to close the dungeon view and return to the overworld.
+type DungeonResolved struct {
+	Type        string `json:"type"`
+	Narration   string `json:"narration"`
+	GoldAwarded int    `json:"goldAwarded"`
 }
 
 type ErrorMessage struct {

@@ -44,10 +44,12 @@ export function ChoicePanel() {
         )}
 
         {voteResolution ? (
-          <div className="bg-[#2a2218] border-l-2 border-good p-2 text-sm mt-2">
+          <div className="bg-[#2a2218] border-l-2 border-good p-2 text-sm mt-2 space-y-1">
+            <p className="m-0 text-xs uppercase tracking-wide text-accent">Game Master</p>
             <p className="m-0">
-              The party chose: <strong>{optionLabel(choice, voteResolution.optionId)}</strong>
+              Chosen: <strong>{optionLabel(choice, voteResolution.optionId)}</strong>
             </p>
+            {voteResolution.narration && <p className="m-0 italic">{voteResolution.narration}</p>}
             <p className="m-0">
               Honor {voteResolution.honorDelta >= 0 ? '+' : ''}
               {voteResolution.honorDelta} (now {voteResolution.newHonor})

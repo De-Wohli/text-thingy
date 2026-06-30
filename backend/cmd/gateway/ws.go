@@ -11,7 +11,9 @@ import (
 	"github.com/google/uuid"
 
 	"dnd5e-web/backend/internal/chat"
+	"dnd5e-web/backend/internal/combat"
 	"dnd5e-web/backend/internal/models"
+	"dnd5e-web/backend/internal/narrator"
 	"dnd5e-web/backend/internal/queue"
 	"dnd5e-web/backend/internal/redisstate"
 	"dnd5e-web/backend/internal/voting"
@@ -300,12 +302,23 @@ func (s *server) handleMakeChoice(ctx context.Context, client *chat.Client, payl
 	if err != nil {
 		return err
 	}
+
+	optionLabel := p.OptionID
+	for _, o := range prompt.Options {
+		if o.ID == p.OptionID {
+			optionLabel = o.Label
+		}
+	}
+	line := narrator.ChoiceResolution(optionLabel, string(typology))
+	s.sendNarration(client.AccountID, "", line)
+
 	return client.WriteJSON(wsproto.VoteResolved{
 		Type:       "VOTE_RESOLVED",
 		PromptID:   prompt.ID,
 		OptionID:   p.OptionID,
 		HonorDelta: models.HonorImpact[typology],
 		NewHonor:   newHonor,
+		Narration:  line,
 	})
 }
 
@@ -411,6 +424,19 @@ func (s *server) handleEnterPOI(ctx context.Context, client *chat.Client) error 
 	return s.queue.Publish(ctx, queue.QueueDungeonGeneration, job)
 }
 
+var roomLabels = map[models.DungeonRoomType]string{
+	models.RoomStart:    "entrance",
+	models.RoomHallway:  "corridor",
+	models.RoomTreasure: "treasure vault",
+	models.RoomBoss:     "boss's den",
+}
+
+// handleClearDungeonRoom actually fights the room's encounter (see
+// internal/combat) instead of instantly flipping a flag: a real d20 attack
+// roll against the SRD Armor Class for each monster, real damage dice, and
+// the character's own HP at risk. Losing an encounter doesn't end the
+// dungeon run — see internal/combat's package docs for why this prototype
+// has no permadeath.
 func (s *server) handleClearDungeonRoom(ctx context.Context, client *chat.Client, payload json.RawMessage) error {
 	var p wsproto.ClearDungeonRoomPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -420,25 +446,95 @@ func (s *server) handleClearDungeonRoom(ctx context.Context, client *chat.Client
 	if err != nil {
 		return err
 	}
+	if account.ActiveCharacterID == nil {
+		return wsError("recruit a character at the Guild Hall before adventuring")
+	}
+	character, err := s.store.GetCharacter(ctx, *account.ActiveCharacterID)
+	if err != nil {
+		return err
+	}
 	key := partyKey(account)
 
 	s.dungeonsMu.Lock()
-	defer s.dungeonsMu.Unlock()
 	d, ok := s.dungeons[key]
 	if !ok {
+		s.dungeonsMu.Unlock()
 		return wsError("no active dungeon instance")
 	}
-	for i, room := range d.Rooms {
-		if room.Type == p.RoomType {
-			d.Rooms[i].Cleared = true
+	var room *models.DungeonRoom
+	for i := range d.Rooms {
+		if d.Rooms[i].Type == p.RoomType {
+			room = &d.Rooms[i]
 		}
 	}
-	for _, room := range d.Rooms {
-		if room.Type == models.RoomBoss {
-			d.Resolved = room.Cleared
+	if room == nil {
+		s.dungeonsMu.Unlock()
+		return wsError("unknown room")
+	}
+	if room.Cleared {
+		s.dungeonsMu.Unlock()
+		return wsError("that room is already cleared")
+	}
+	monsters := []models.Monster{}
+	for _, e := range d.Encounters {
+		if e.RoomType == p.RoomType {
+			monsters = e.Monsters
 		}
 	}
-	return client.WriteJSON(wsproto.NewDungeonReady(*d))
+	s.dungeonsMu.Unlock()
+
+	result := combat.Resolve(character, monsters)
+
+	// A defeat isn't a permadeath (see internal/combat docs) — the
+	// character retreats and is fully healed rather than persisting at the
+	// narrative "barely standing" 1 HP, so a lost encounter is a setback to
+	// retry, not a permanent soft-lock.
+	persistedHP := result.CharacterHPAfter
+	if !result.Victory {
+		persistedHP = character.HPMax
+	}
+	if err := s.store.UpdateCharacterHP(ctx, character.ID, persistedHP); err != nil {
+		return err
+	}
+
+	roomLabel := roomLabels[p.RoomType]
+	var line string
+	if result.Victory {
+		line = narrator.RoomVictory(character.Name, roomLabel, result.MonstersDefeated)
+	} else {
+		line = narrator.RoomDefeat(character.Name, roomLabel)
+	}
+
+	s.dungeonsMu.Lock()
+	if result.Victory {
+		room.Cleared = true
+		for i := range d.Rooms {
+			if d.Rooms[i].Type == models.RoomBoss {
+				d.Resolved = d.Rooms[i].Cleared
+			}
+		}
+	}
+	dungeonCopy := *d
+	s.dungeonsMu.Unlock()
+
+	s.sendNarration(client.AccountID, client.PartyID, line)
+
+	if err := client.WriteJSON(wsproto.RoomResolved{
+		Type:      "ROOM_RESOLVED",
+		RoomType:  p.RoomType,
+		Victory:   result.Victory,
+		CombatLog: result.Rounds,
+		Narration: line,
+		Dungeon:   dungeonCopy,
+	}); err != nil {
+		return err
+	}
+
+	sync, err := s.stateSync(ctx, client.AccountID)
+	if err != nil {
+		return err
+	}
+	return client.WriteJSON(sync)
 }
 
 func (s *server) handleResolveDungeon(ctx context.Context, client *chat.Client) error {
@@ -462,7 +558,20 @@ func (s *server) handleResolveDungeon(ctx context.Context, client *chat.Client) 
 	if err := s.store.ResolveDungeon(ctx, d.ID); err != nil {
 		return err
 	}
-	if err := s.store.AddGold(ctx, client.AccountID, 25); err != nil {
+	const goldReward = 25
+	if err := s.store.AddGold(ctx, client.AccountID, goldReward); err != nil {
+		return err
+	}
+
+	characterName := s.activeCharacterName(ctx, account)
+	line := narrator.DungeonResolved(characterName, goldReward)
+	s.sendNarration(client.AccountID, client.PartyID, line)
+
+	if err := client.WriteJSON(wsproto.DungeonResolved{
+		Type:        "DUNGEON_RESOLVED",
+		Narration:   line,
+		GoldAwarded: goldReward,
+	}); err != nil {
 		return err
 	}
 

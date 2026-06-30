@@ -120,3 +120,15 @@ The backend, protocol, and underlying tile-grid movement/coordinate model descri
 - **The dungeon view is a room-card encounter track** (Entrance → Corridor → Treasure Vault → Boss's Den, each a card with its monster list and a "Resolve Encounter" button) instead of rendering the 15×15 grid as ASCII — this reads as a tabletop dungeon-crawl board rather than a video-game minimap, while the server-side procedural generation (CR budget, room layout) is unchanged.
 
 See `frontend/src/components/OverworldCanvas.tsx`, `DirectionPad.tsx`, `LocationActions.tsx`, and `DungeonView.tsx`.
+
+## Implementation Note — Game Master narrator + real 5e combat (2026-06-30)
+
+Two more requests drove this pass: a "Game Master" narrator voice running through the experience, and combat that follows 5e rules more closely instead of "click a button to instantly clear the room."
+
+- **Combat is now resolved with real dice**, not a flag flip: `backend/internal/combat` rolls a d20 + proficiency bonus + ability modifier against each monster's SRD Armor Class, applies SRD damage dice, and alternates the character's attack with every surviving monster's attack until one side is defeated. Character HP persists in Postgres across the fight.
+- **A losing encounter isn't permadeath.** 5e doesn't define what "game over" means for a prototype like this, so a defeated character retreats and is healed back to full rather than being stuck at the SRD death-save threshold — see `internal/combat`'s package doc for the reasoning. This means an encounter has real stakes (you can lose a specific attempt) without a soft-lock or a "you lose, restart everything" failure state.
+- **Boss-tier monsters are tuned below their real SRD CR.** The Bandit Captain and Cult Fanatic are CR 2 in the book, which assumes a 4-character party splitting the action economy. This prototype has no party-formation flow yet (every dungeon is fought solo), and a true CR 2 monster is mathematically unwinnable for one level-1 character. Tuned down to roughly CR 1/2 toughness instead — "dangerous but winnable solo fight." Revisit once party formation exists.
+- **Character ability scores now follow the 5e standard array (15/14/13/12/10/8), assigned by class priority, with racial bonuses on top** — not flat 10s across the board. This was a quieter but necessary fix: the original flat-10 chargen made every class equally (and unrealistically) weak in combat, which is itself a combat-balance bug once real dice are involved.
+- **A Game-Master-voiced Narrator** generates flavor text for dungeon entry, every attack roll, room victory/defeat, the final boss reward, and NPC/party choice resolutions (`backend/internal/narrator`, template-based — not an LLM call, to keep gateway latency and dependency surface small). Narration is both shown inline where the relevant action happened (the dungeon combat log, the choice resolution panel) and logged persistently to a new `/gm` chat channel so the table has a session record, not just a transient toast.
+
+See `backend/internal/combat`, `backend/internal/narrator`, and `frontend/src/components/DungeonView.tsx` / `ChoicePanel.tsx` / `ChatPanel.tsx`.

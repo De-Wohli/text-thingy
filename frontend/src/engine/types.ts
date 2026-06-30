@@ -66,7 +66,7 @@ export type Account = {
 
 export type TileType = 'floor' | 'wall' | 'water' | 'guild' | 'tavern' | 'npc' | 'poi'
 
-export type ChatChannel = 'global' | 'guild' | 'party' | 'rp'
+export type ChatChannel = 'global' | 'guild' | 'party' | 'rp' | 'narrator'
 
 export type ChatMessage = {
   channel: ChatChannel
@@ -103,9 +103,22 @@ export type Monster = {
   id: string
   name: string
   challengeRating: number
+  armorClass: number
   hp: number
   attackBonus: number
   damageDie: string
+}
+
+export type AttackRoll = {
+  attacker: string
+  target: string
+  d20: number
+  attackBonus: number
+  total: number
+  targetAc: number
+  hit: boolean
+  critical: boolean
+  damage: number
 }
 
 export type DungeonEncounter = {

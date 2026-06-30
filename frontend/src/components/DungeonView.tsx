@@ -1,5 +1,5 @@
 import { useGame } from '../state/GameProvider'
-import type { DungeonRoom } from '../engine/types'
+import type { AttackRoll, DungeonRoom } from '../engine/types'
 
 const ROOM_ORDER: DungeonRoom['type'][] = ['start', 'hallway', 'treasure', 'boss']
 
@@ -17,10 +17,23 @@ const ROOM_LABEL: Record<DungeonRoom['type'], string> = {
   boss: "Boss's Den",
 }
 
+function AttackLine({ roll }: { roll: AttackRoll }) {
+  const verb = roll.hit ? (roll.critical ? 'CRIT' : 'hits') : 'misses'
+  return (
+    <p className={`m-0 ${roll.hit ? (roll.critical ? 'text-evil font-bold' : '') : 'text-[#8a7e63] italic'}`}>
+      {roll.attacker} attacks {roll.target}: d20={roll.d20}+{roll.attackBonus}={roll.total} vs AC {roll.targetAc} —{' '}
+      {verb}
+      {roll.hit ? ` for ${roll.damage} damage` : ''}
+    </p>
+  )
+}
+
 export function DungeonView() {
   const { state, actions } = useGame()
   const dungeon = state.activeDungeon
   if (!dungeon) return null
+
+  const resolution = state.lastRoomResolution
 
   return (
     <div
@@ -31,7 +44,9 @@ export function DungeonView() {
       <div className="bg-panel border border-accent rounded-md p-6 max-w-2xl w-full max-h-[85vh] overflow-y-auto">
         <header className="mb-4">
           <h2 className="m-0">Dungeon Instance</h2>
-          <p className="text-sm text-[#b3a78c] m-0">Resolve each encounter in order to reach the boss.</p>
+          {state.dungeonEntryNarration && (
+            <p className="text-sm italic text-accent mt-1">{state.dungeonEntryNarration}</p>
+          )}
         </header>
 
         <div className="flex flex-col md:flex-row items-stretch gap-2">
@@ -61,7 +76,7 @@ export function DungeonView() {
                     <div className="flex flex-wrap justify-center gap-1 text-xs">
                       {encounter.monsters.map((m, idx) => (
                         <span key={idx} className="bg-[#0c0a08] rounded px-1.5 py-0.5">
-                          {m.name}
+                          {m.name} (AC {m.armorClass})
                         </span>
                       ))}
                     </div>
@@ -88,6 +103,24 @@ export function DungeonView() {
             )
           })}
         </div>
+
+        {resolution && (
+          <div
+            className={`mt-4 rounded border p-3 ${resolution.victory ? 'border-good bg-[#1c2a1c]' : 'border-evil bg-[#2a1c1c]'}`}
+          >
+            <p className={`m-0 mb-2 font-bold ${resolution.victory ? 'text-good' : 'text-evil'}`}>
+              {resolution.victory ? 'Victory' : 'Defeat'} — {ROOM_LABEL[resolution.roomType]}
+            </p>
+            <p className="italic text-sm mb-2">{resolution.narration}</p>
+            <div className="bg-[#0c0a08] rounded p-2 text-xs space-y-1 max-h-40 overflow-y-auto font-mono">
+              {(resolution.combatLog ?? []).length === 0 ? (
+                <p className="m-0 italic text-[#8a7e63]">No blows exchanged — the room was already clear.</p>
+              ) : (
+                resolution.combatLog.map((roll, i) => <AttackLine key={i} roll={roll} />)
+              )}
+            </div>
+          </div>
+        )}
 
         <button
           className="bg-good text-ink w-full mt-4 rounded px-3 py-2 disabled:bg-[#4a3f2c] disabled:text-[#8a7e63]"

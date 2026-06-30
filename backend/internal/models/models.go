@@ -28,6 +28,34 @@ type AbilityScores struct {
 	Cha int `json:"cha"`
 }
 
+// AbilityModifier applies the SRD formula (floor((score-10)/2)) — Go's
+// integer division truncates toward zero, not floor, so this has to handle
+// negative scores explicitly to match the rulebook for sub-10 scores.
+func AbilityModifier(score int) int {
+	diff := score - 10
+	mod := diff / 2
+	if diff%2 != 0 && diff < 0 {
+		mod--
+	}
+	return mod
+}
+
+// ProficiencyBonusForLevel follows the SRD proficiency bonus progression.
+func ProficiencyBonusForLevel(level int) int {
+	return 2 + (level-1)/4
+}
+
+// ArmorClassFor is a simplified SRD-equipment assumption per class: Fighters
+// are proficient with all armor and assumed to start in chain mail (AC 16,
+// no Dex); Wizards have no armor proficiency, so their AC is unarmored
+// (10 + Dex modifier).
+func ArmorClassFor(classID ClassID, dexModifier int) int {
+	if classID == ClassFighter {
+		return 16
+	}
+	return 10 + dexModifier
+}
+
 type Race struct {
 	ID             RaceID         `json:"id"`
 	Name           string         `json:"name"`
@@ -119,10 +147,11 @@ type Account struct {
 type ChatChannel string
 
 const (
-	ChannelGlobal ChatChannel = "global"
-	ChannelGuild  ChatChannel = "guild"
-	ChannelParty  ChatChannel = "party"
-	ChannelRP     ChatChannel = "rp"
+	ChannelGlobal   ChatChannel = "global"
+	ChannelGuild    ChatChannel = "guild"
+	ChannelParty    ChatChannel = "party"
+	ChannelRP       ChatChannel = "rp"
+	ChannelNarrator ChatChannel = "narrator" // server-generated GM flavor text; not a client-writable channel
 )
 
 type ChatMessage struct {
@@ -187,6 +216,7 @@ type Monster struct {
 	ID              string  `json:"id"`
 	Name            string  `json:"name"`
 	ChallengeRating float64 `json:"challengeRating"`
+	ArmorClass      int     `json:"armorClass"`
 	HP              int     `json:"hp"`
 	AttackBonus     int     `json:"attackBonus"`
 	DamageDie       string  `json:"damageDie"`

@@ -28,12 +28,17 @@ A tabletop-styled prototype of a persistent 5e-compatible web MMO: an account-wi
 
 The gateway is the only thing that needs to be fast and always-on for every connected player. Dungeon generation and vote resolution are bursty and involve heavier Postgres writes, so they're pushed onto a queue a worker can consume independently — the gateway never blocks a WebSocket request on either. Redis exists purely so a second gateway replica could be added later without re-architecting chat/vote fan-out (the prototype runs a single replica, but `internal/chat.Hub` + Redis pub/sub already assume there could be more than one).
 
+### Combat and the Narrator
+
+Clearing a dungeon room actually fights it: `backend/internal/combat` rolls a d20 + proficiency bonus + ability modifier against the SRD Armor Class of every monster in the room, applies SRD damage dice, and alternates the character's attack with each surviving monster's attack until one side falls. A `backend/internal/narrator` package (template-based, not an LLM call) generates Game-Master-voiced flavor text for dungeon entry, every attack, room victory/defeat, the boss reward, and NPC/party choice outcomes — shown inline where the action happened and logged persistently to a `/gm` chat channel. See the "Implementation Note" at the bottom of `outline.md` for the full reasoning, including why losing an encounter doesn't end the run (no permadeath) and why boss monsters are tuned below their real SRD CR (a true CR 2 boss is mathematically unwinnable for a solo level-1 character — see "Known simplifications" below).
+
 ### Known simplifications (Phase 1 prototype)
 
 - Single gateway/worker replica in `docker-compose.yml` (the Redis pub/sub fan-out exists so adding replicas later doesn't require a rewrite, but it isn't load-tested here).
 - `/guild` and `/rp` chat reach every locally-connected client rather than being filtered by zone/proximity — `/party` is properly scoped by `PartyID`.
 - No inventory/spellbook persistence per character yet (the original Phase 1 spec calls for it; this rebuild prioritized the RP/voting/dungeon-async pipeline). `ability_*` columns and `honor_log` are there; inventory is a natural next migration.
 - There's no party-formation flow yet — `account.partyId` exists in the schema and is honored everywhere (chat scoping, vote rooms, dungeon instances), but nothing currently sets it, so every account is effectively solo. Wiring up an invite/accept flow is the natural next step before party voting/dungeons can be exercised with more than one player.
+- Combat is simplified 5e: one attack per character per round (no multiattack, no spell slots/cantrip distinction — Wizards just roll a different damage die), no conditions, no saving throws, and a losing encounter fully heals the character on retreat rather than implementing death saves. Boss monsters are tuned for solo play, well below their real SRD Challenge Rating (see "Combat and the Narrator" above).
 
 ## Local development
 
@@ -92,6 +97,8 @@ backend/
   internal/models/       shared domain types
   internal/honor/        Honor & Alignment Matrix
   internal/dungeon/      procedural dungeon generation + CR budget
+  internal/combat/       d20 attack rolls, SRD damage dice, encounter resolution
+  internal/narrator/     Game-Master-voiced flavor text generation
   internal/voting/       solo/party Choice & Voting engine
   internal/chat/         in-process WebSocket connection hub
   internal/wsproto/      WebSocket JSON protocol (mirror of frontend/src/ws/protocol.ts)

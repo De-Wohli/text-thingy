@@ -50,6 +50,7 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
           mode: message.mode,
           options: message.options,
           deadline: message.deadline,
+          narration: message.narration,
         },
         voteTallies: null,
         voteResolution: null,
@@ -68,12 +69,40 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
           honorDelta: message.honorDelta,
           newHonor: message.newHonor,
           tieBreak: message.tieBreak,
+          narration: message.narration,
         },
         account: state.account ? { ...state.account, honor: message.newHonor } : state.account,
       }
 
     case 'DUNGEON_READY':
-      return { ...state, view: 'dungeon', activeDungeon: message.dungeon }
+      return {
+        ...state,
+        view: 'dungeon',
+        activeDungeon: message.dungeon,
+        dungeonEntryNarration: message.narration ?? null,
+        lastRoomResolution: null,
+      }
+
+    case 'ROOM_RESOLVED':
+      return {
+        ...state,
+        activeDungeon: message.dungeon,
+        lastRoomResolution: {
+          roomType: message.roomType,
+          victory: message.victory,
+          combatLog: message.combatLog,
+          narration: message.narration,
+        },
+      }
+
+    case 'DUNGEON_RESOLVED':
+      return {
+        ...state,
+        view: 'overworld',
+        activeDungeon: null,
+        lastRoomResolution: null,
+        lastMessage: message.narration,
+      }
 
     case 'ERROR':
       return { ...state, lastMessage: message.message }
