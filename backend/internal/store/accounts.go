@@ -115,7 +115,10 @@ func (s *Store) ListCharacters(ctx context.Context, accountID string) ([]models.
 	}
 	defer rows.Close()
 
-	var characters []models.Character
+	// Initialized (not nil) so json.Marshal produces `[]` instead of `null`
+	// when an account has no characters yet — the frontend calls
+	// .find/.length on this without a null check.
+	characters := []models.Character{}
 	for rows.Next() {
 		var c models.Character
 		if err := rows.Scan(&c.ID, &c.AccountID, &c.Name, &c.RaceID, &c.ClassID, &c.Level, &c.Status,
