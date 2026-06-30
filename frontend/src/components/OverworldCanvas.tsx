@@ -1,19 +1,20 @@
 import { useEffect, useMemo } from 'react'
 import { useGame } from '../state/GameProvider'
-import { buildOverworldGrid } from '../data/overworld'
+import { buildOverworldGrid, MAP_WIDTH } from '../data/overworld'
 import type { TileType } from '../engine/types'
+import { DirectionPad } from './DirectionPad'
 
-// Single-character glyphs keep every grid cell the same width so rows stay
-// aligned in the monospace <pre>; the bracketed [A]/[T]/[N]/[?] notation from
-// the design doc is shown in the legend instead (see MapLegend).
-const TILE_GLYPH: Record<TileType, string> = {
-  wall: '#',
-  floor: '.',
-  water: '~',
-  guild: 'A',
-  tavern: 'T',
-  npc: 'N',
-  poi: '?',
+// A small visual vocabulary per tile type — color + icon — so the overworld
+// reads as a tabletop game board (think: a printed map with tokens on it)
+// rather than a terminal/ASCII dungeon-crawler grid.
+const TILE_STYLE: Record<TileType, { bg: string; icon?: string; title: string }> = {
+  wall: { bg: 'bg-[#241f17]', title: 'Wall' },
+  floor: { bg: 'bg-[#3a3122]', title: 'Ground' },
+  water: { bg: 'bg-[#2b4a64]', icon: '~', title: 'River (impassable)' },
+  guild: { bg: 'bg-accent', icon: '\u{1F3DB}\u{FE0F}', title: "Adventurer's Guild Hall" },
+  tavern: { bg: 'bg-[#8a5a2b]', icon: '\u{1F37A}', title: 'The Yawning Flask Tavern' },
+  npc: { bg: 'bg-[#6b3fa0]', icon: '\u{1F9D9}', title: 'Citizen' },
+  poi: { bg: 'bg-evil', icon: '❓', title: 'Unexplored point of interest' },
 }
 
 const KEY_TO_DELTA: Record<string, { dx: number; dy: number }> = {
@@ -26,6 +27,8 @@ const KEY_TO_DELTA: Record<string, { dx: number; dy: number }> = {
   d: { dx: 1, dy: 0 },
   ArrowRight: { dx: 1, dy: 0 },
 }
+
+const CELL_SIZE = 20
 
 export function OverworldCanvas() {
   const { state, actions } = useGame()
@@ -46,20 +49,34 @@ export function OverworldCanvas() {
   return (
     <div
       id="overworld-screen"
-      aria-label="Overworld map, use WASD or arrow keys to move"
-      className="bg-[#0c0a08] border-2 border-accent rounded overflow-x-auto p-4"
+      aria-label="Overworld map"
+      className="bg-[#0c0a08] border-2 border-accent rounded p-4 flex flex-col items-center gap-4"
     >
-      <pre className="m-0 text-sm leading-tight tracking-wide text-[#8fbf8f]">
-        {grid
-          .map((row, y) =>
-            row
-              .map((tile, x) =>
-                coordinate && x === coordinate.x && y === coordinate.y ? '@' : TILE_GLYPH[tile],
+      <div className="overflow-x-auto max-w-full">
+        <div
+          className="grid gap-px"
+          style={{ gridTemplateColumns: `repeat(${MAP_WIDTH}, ${CELL_SIZE}px)` }}
+        >
+          {grid.map((row, y) =>
+            row.map((tile, x) => {
+              const isPlayer = coordinate && x === coordinate.x && y === coordinate.y
+              const style = TILE_STYLE[tile]
+              return (
+                <div
+                  key={`${x}-${y}`}
+                  title={isPlayer ? 'You' : style.title}
+                  className={`flex items-center justify-center text-[11px] leading-none ${isPlayer ? 'bg-good ring-2 ring-parchment z-10' : style.bg}`}
+                  style={{ width: CELL_SIZE, height: CELL_SIZE }}
+                >
+                  {isPlayer ? '⚔️' : style.icon}
+                </div>
               )
-              .join(''),
-          )
-          .join('\n')}
-      </pre>
+            }),
+          )}
+        </div>
+      </div>
+
+      <DirectionPad />
     </div>
   )
 }

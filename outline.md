@@ -107,3 +107,16 @@ Provide the prototype codebase divided into:
 Golang Backend Architecture: Code files implementing the WebSocket hub, a basic HTTP router, and the RabbitMQ Publisher/Consumer configuration for handling dungeon requests and voting inputs.
 Frontend Interface (HTML/CSS/JS or Framework components): A functional dashboard showcasing the ASCII canvas layout alongside split windows for Text RP Chat and Active Voting Prompts. Ensure pressing keys updates coordinates and triggers WebSocket state sync.
 Do you want to focus next on drafting the specific Go struct models for the WebSocket payloads (chat, movement, votes), or look into how RabbitMQ handles the asynchronous dungeon creation tasks when a quest is triggered?
+
+---
+
+## Implementation Note — UI direction (2026-06-30)
+
+The backend, protocol, and underlying tile-grid movement/coordinate model described above were implemented as specified (MOVE/RP_CHAT/CAST_VOTE/SWAP_CHARACTER over WebSockets, RabbitMQ-backed dungeon generation and vote resolution, etc.). The literal *rendering* of section 3 was deliberately reinterpreted after the first pass felt closer to a terminal/ASCII dungeon crawler than the "tabletop" framing this section asks for:
+
+- **The overworld map is a visual board, not monospace text.** Each grid cell renders as a colored/iconed tile (CSS grid, not a `<pre>` of `#`/`.`/`~` characters) — closer to a printed tabletop map with tokens on it than a terminal screen. The underlying data model (a `TileType[][]` grid, walkability rules, landmark coordinates) is unchanged; only the presentation layer changed.
+- **Movement has an on-screen directional pad** (cardinal-direction buttons) in addition to WASD/arrow keys, so the game is playable without a keyboard.
+- **Contextual actions are surfaced as buttons, not discovered by exploration.** A "Here" panel lists exactly the actions available at the player's current position (Talk to Citizen, Enter the Guild Hall, Investigate the point of interest), appearing only when in range rather than requiring the player to know the interaction exists.
+- **The dungeon view is a room-card encounter track** (Entrance → Corridor → Treasure Vault → Boss's Den, each a card with its monster list and a "Resolve Encounter" button) instead of rendering the 15×15 grid as ASCII — this reads as a tabletop dungeon-crawl board rather than a video-game minimap, while the server-side procedural generation (CR budget, room layout) is unchanged.
+
+See `frontend/src/components/OverworldCanvas.tsx`, `DirectionPad.tsx`, `LocationActions.tsx`, and `DungeonView.tsx`.

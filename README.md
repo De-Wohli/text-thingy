@@ -1,6 +1,6 @@
 # 5e Web MMO — Prototype
 
-A text/ASCII-based prototype of a persistent 5e-compatible web MMO: an account-wide character roster, an Honor/Alignment system that reshapes how the world reacts to you, a Text RP chat engine, a party Choice/Voting system, and procedurally generated dungeons. See [outline.md](outline.md) for the original design brief.
+A tabletop-styled prototype of a persistent 5e-compatible web MMO: an account-wide character roster, an Honor/Alignment system that reshapes how the world reacts to you, a Text RP chat engine, a party Choice/Voting system, and procedurally generated dungeons. See [outline.md](outline.md) for the original design brief, including a note on why the overworld renders as a visual tile board with buttons rather than literal ASCII text.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ A text/ASCII-based prototype of a persistent 5e-compatible web MMO: an account-w
 - **worker** (`backend/cmd/worker`) — consumes `dungeon_generation_queue` (procedural 15×15 grid generation) and `vote_resolution_queue` (batched Honor writes once a party vote's 30-second window closes), then publishes the result back over Redis pub/sub so the gateway can relay it to the right client(s).
 - **Redis** — transient, real-time state only: live chat fan-out between gateway replicas, in-flight vote tallies, and player coordinates. Nothing here is durable.
 - **Postgres** — the durable system of record: accounts, characters, an append-only honor audit log, and dungeon instances.
-- **frontend** (`frontend/`) — React + TypeScript + Tailwind. A thin client: it renders whatever state the gateway pushes over the WebSocket and sends user intents back as typed messages. See `frontend/src/ws/protocol.ts` and `backend/internal/wsproto/protocol.go` — **keep these two in sync by hand**, there's no shared codegen.
+- **frontend** (`frontend/`) — React + TypeScript + Tailwind. A thin client: it renders whatever state the gateway pushes over the WebSocket and sends user intents back as typed messages. See `frontend/src/ws/protocol.ts` and `backend/internal/wsproto/protocol.go` — **keep these two in sync by hand**, there's no shared codegen. The overworld is a visual tile board (CSS grid with colored/iconed cells, not ASCII text) navigated with on-screen direction buttons or keyboard; a "Here" panel surfaces only the actions actually available at the player's position (Talk to Citizen, Enter the Guild Hall, etc.) instead of disabled buttons the player has to discover; dungeons render as a room-card encounter track rather than a literal grid. See the "Implementation Note" at the bottom of `outline.md`.
 
 ### Why this split
 

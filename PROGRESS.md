@@ -27,10 +27,10 @@ The full stack described in `outline.md` (Go gateway/worker, RabbitMQ, Redis, Po
 This is exactly the kind of bug that only shows up when you run the real thing — both would have shipped silently otherwise.
 
 ### What's still NOT verified
-- No manual/browser testing of the actual React UI rendering (only tested the wire protocol directly via WebSocket scripts + curl). The pages/components themselves haven't been visually confirmed in a browser.
 - GitHub Actions (`ci.yml`, `docker-publish.yml`) have not been confirmed green on the actual repo — check https://github.com/De-Wohli/text-thingy/actions after pushing the latest commits.
 - Party-mode voting (the 30-second timer, multi-voter tally, tie-break) was unit-tested (`internal/voting`) but not exercised live — would need a second account in the same party, and nothing sets `partyId` yet (see Known gaps).
 - `/guild` and `/rp` chat channels not manually tested live (only `/global` was exercised in the live run).
+- The UI redesign (see below) was screenshot-verified at one viewport size (1280×900) — no responsive/mobile pass.
 
 ### Blocked / needs user action
 - **`gh` was installed but isn't on this shell's PATH** — a fresh terminal may pick it up; if not, check how it was installed (e.g. needs `~/.local/bin` or similar on `$PATH`). Run `gh auth login` once it resolves so CI status/PR work can be checked from the CLI going forward.
@@ -80,9 +80,17 @@ See `README.md` for the full breakdown. Quick summary:
 - Found and fixed two real bugs that only surfaced by actually running the stack (nil-slice JSON serialization, nginx upstream DNS caching) — see "Bugs found" above. Committed as `a317676`.
 - Did not yet open the frontend in an actual browser to visually confirm the React UI — only the wire protocol was exercised directly.
 
+### 2026-06-30 — Tabletop UI redesign
+- User feedback: the overworld read as an ASCII dungeon-crawler, not a tabletop game — wanted a visual map, button-based cardinal-direction navigation, contextual action buttons (Talk to NPC, Enter Guild Hall) instead of disabled buttons the player has to discover, and a less literal dungeon rendering.
+- Rewrote `OverworldCanvas.tsx` as a CSS-grid visual board (colored/iconed tiles instead of a `<pre>` of ASCII characters); added `DirectionPad.tsx` (cardinal-direction buttons); added `LocationActions.tsx` (a "Here" panel that only renders the actions actually available at the player's position); rewrote `DungeonView.tsx` as a room-card encounter track (Entrance → Corridor → Treasure Vault → Boss's Den) instead of rendering the 15×15 grid as ASCII; restyled `MapLegend.tsx` to match. Appended an "Implementation Note" to `outline.md` documenting this as a deliberate presentation-layer deviation (the underlying tile-grid/coordinate data model is unchanged).
+- **Found and fixed a real data bug while building this**: `frontend/src/data/overworld.ts`'s `RAW_MAP` rows were inconsistent lengths (59–62 chars) — invisible in the old `<pre>` rendering (each row is its own text line) but would have silently shifted every tile after a short row by one column in the new CSS grid (which flattens all rows into one sequential list of grid items). Rebuilt the map at a uniform 61 chars/row and mirrored the exact same string array into `backend/internal/worldmap/worldmap.go` (verified byte-identical with a script diff) so server-side adjacency/walkability checks didn't drift from the client's rendering.
+- Verified frontend lint/typecheck/test (9 tests)/build all pass.
+- Visually verified in an actual browser: no project skill existed for this, so installed Playwright + a headless Chromium build into the scratchpad (no sudo needed — `npx playwright install chromium`, skipping `--with-deps` which wanted sudo) and drove the running `npm run dev` server. Confirmed via screenshots: the visual board renders correctly, direction-pad clicks move the player token, the "Here" panel correctly shows/hides "Enter the Guild Hall" based on proximity, character creation works end-to-end through the actual UI (not just the wire protocol), and the dungeon room-card track renders with the right monster/cleared state. Zero browser console errors throughout. (One false alarm along the way: an unscoped Playwright `input` selector matched the wrong element on a page with two inputs and silently mis-filled a field — confirmed it was a test-script bug, not an app bug, by re-running with a properly-scoped locator.)
+- Rebuilt the `frontend` Docker image so the running `docker compose` stack reflects the new UI. Then realized the map-data fix lives in `backend/internal/worldmap`, not `frontend/` — separately rebuilt `gateway` (worker didn't need it; `cmd/worker` doesn't import `worldmap`, so its build output was byte-identical and Docker correctly skipped recreating it) and confirmed with a fresh WebSocket smoke test that NPC and POI adjacency checks still pass server-side against the corrected map.
+
 ## Next steps (suggested, not started)
-1. Open `http://localhost:5173` in an actual browser and click through character creation, movement, chat, NPC dialogue, and a dungeon run — the protocol is confirmed working but the UI itself hasn't been eyeballed.
-2. Confirm GitHub Actions are green on the latest pushed commits.
-3. Decide on a party-formation flow (invite/accept) so `/party` chat and party voting can actually be exercised with 2+ players — this is the biggest remaining gap between "implemented" and "matches the full outline.md design."
-4. Decide whether to pursue inventory/spellbook persistence (deferred Phase 1 scope).
-5. If/when a real hosting target is chosen, extend `docker-publish.yml` with an actual deploy step.
+1. Confirm GitHub Actions are green on the latest pushed commits.
+2. Decide on a party-formation flow (invite/accept) so `/party` chat and party voting can actually be exercised with 2+ players — this is the biggest remaining gap between "implemented" and "matches the full outline.md design."
+3. Decide whether to pursue inventory/spellbook persistence (deferred Phase 1 scope).
+4. If/when a real hosting target is chosen, extend `docker-publish.yml` with an actual deploy step.
+5. A responsive/mobile pass on the new UI — only verified at a 1280×900 desktop viewport so far.
