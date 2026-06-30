@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+*.local
+*.tsbuildinfo
+.DS_Store
+*.log
+
+# Go
+/backend/gateway
+/backend/worker
+/backend/cmd/gateway/gateway
+/backend/cmd/worker/worker
+
+# Local-only secrets
+.env
