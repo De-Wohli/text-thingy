@@ -18,27 +18,33 @@ A tabletop-styled prototype of a persistent 5e-compatible web MMO: an account-wi
    (dungeon generation, vote-window honor writes)
 ```
 
-- **gateway** (`backend/cmd/gateway`) — owns client WebSocket connections, parses inbound actions (`MOVE`, `RP_CHAT`, `CAST_VOTE`, `SWAP_CHARACTER`, ...), reads/writes Postgres for anything that needs to happen inline (movement, character CRUD, chat routing), and offloads the two heavy/async operations to RabbitMQ instead of blocking the socket.
-- **worker** (`backend/cmd/worker`) — consumes `dungeon_generation_queue` (procedural 15×15 grid generation) and `vote_resolution_queue` (batched Honor writes once a party vote's 30-second window closes), then publishes the result back over Redis pub/sub so the gateway can relay it to the right client(s).
-- **Redis** — transient, real-time state only: live chat fan-out between gateway replicas, in-flight vote tallies, and player coordinates. Nothing here is durable.
-- **Postgres** — the durable system of record: accounts, characters, an append-only honor audit log, and dungeon instances.
-- **frontend** (`frontend/`) — React + TypeScript + Tailwind. A thin client: it renders whatever state the gateway pushes over the WebSocket and sends user intents back as typed messages. See `frontend/src/ws/protocol.ts` and `backend/internal/wsproto/protocol.go` — **keep these two in sync by hand**, there's no shared codegen. The overworld is a visual tile board (CSS grid with colored/iconed cells, not ASCII text) navigated with on-screen direction buttons or keyboard; a "Here" panel surfaces only the actions actually available at the player's position (Talk to Citizen, Enter the Guild Hall, etc.) instead of disabled buttons the player has to discover; dungeons render as a room-card encounter track rather than a literal grid. See the "Implementation Note" at the bottom of `outline.md`.
+- **gateway** (`backend/cmd/gateway`) — owns client WebSocket connections, parses inbound actions (`TRAVEL`, `RP_CHAT`, `CAST_VOTE`, `SWAP_CHARACTER`, `INVITE_TO_PARTY`, `START_ENCOUNTER`, `COMBAT_ACTION`, `SKILL_CHECK`, ...), reads/writes Postgres for anything that needs to happen inline, and offloads the two heavy/async operations to RabbitMQ instead of blocking the socket.
+- **worker** (`backend/cmd/worker`) — consumes `dungeon_generation_queue` (procedural room generation) and `vote_resolution_queue` (batched Honor writes once a party vote's 30-second window closes), then publishes the result back over Redis pub/sub so the gateway can relay it to the right client(s).
+- **Redis** — transient, real-time state only: live chat fan-out between gateway replicas, in-flight vote tallies. Nothing here is durable (player location presence is gateway in-memory, not Redis-cached).
+- **Postgres** — the durable system of record: accounts, characters, an append-only honor audit log, parties, and dungeon instances (including room-cleared progress, which persists across gateway restarts so in-progress dungeon runs survive).
+- **frontend** (`frontend/`) — React + TypeScript + Tailwind. A thin client: it renders whatever state the gateway pushes over the WebSocket and sends user intents back as typed messages. See `frontend/src/ws/protocol.ts` and `backend/internal/wsproto/protocol.go` — **keep these two in sync by hand**, there's no shared codegen. Navigation is location-graph based (hub-and-spoke map, not a tile grid); dungeons are room-card encounter tracks with real turn-based combat (`CombatView.tsx`); a party panel, skill-check buttons, and the GM narrator channel round out the VTT feel. See the "Implementation Notes" at the bottom of `outline.md` for full design history.
 
 ### Why this split
 
 The gateway is the only thing that needs to be fast and always-on for every connected player. Dungeon generation and vote resolution are bursty and involve heavier Postgres writes, so they're pushed onto a queue a worker can consume independently — the gateway never blocks a WebSocket request on either. Redis exists purely so a second gateway replica could be added later without re-architecting chat/vote fan-out (the prototype runs a single replica, but `internal/chat.Hub` + Redis pub/sub already assume there could be more than one).
 
-### Combat and the Narrator
+### Combat, narrator, and the VTT model
 
-Clearing a dungeon room actually fights it: `backend/internal/combat` rolls a d20 + proficiency bonus + ability modifier against the SRD Armor Class of every monster in the room, applies SRD damage dice, and alternates the character's attack with each surviving monster's attack until one side falls. A `backend/internal/narrator` package (template-based, not an LLM call) generates Game-Master-voiced flavor text for dungeon entry, every attack, room victory/defeat, the boss reward, and NPC/party choice outcomes — shown inline where the action happened and logged persistently to a `/gm` chat channel. See the "Implementation Note" at the bottom of `outline.md` for the full reasoning, including why losing an encounter doesn't end the run (no permadeath) and why boss monsters are tuned below their real SRD CR (a true CR 2 boss is mathematically unwinnable for a solo level-1 character — see "Known simplifications" below).
+Combat is turn-based: real initiative order (d20 + DEX modifier), each party member acts on their own turn (Attack / Dodge / Flee), monster turns are auto-resolved by the server (the DM is automated, not a human player). Multiple party members fight the same monsters together with shared HP tracking. A 60-second per-turn timeout auto-submits a basic attack to prevent AFK players from freezing the table.
 
-### Known simplifications (Phase 1 prototype)
+The `backend/internal/narrator` package (template-based, not an LLM call — swappable interface for future LLM integration, see the package doc) generates GM-voiced flavor text for arrival at locations, dungeon entry, every attack, room outcomes, skill checks, and NPC/party choice resolutions. All narration is also logged persistently to a `/gm` chat channel. Six 5e skills are modeled for non-combat interactions (Perception, Investigation, Insight, Stealth, Arcana, Athletics) — a successful pre-combat check removes the room's weakest monster from the upcoming fight.
+
+Players join each other's in-progress dungeons by forming a party (invite by display name, accept on the PARTY panel) then traveling to the Mine Entrance and entering — the "hot-drop" path (`handleEnterDungeon`) adds them to the run's present-accounts roster and delivers current dungeon/combat state immediately.
+
+See `outline.md`'s "Implementation Notes" for the full design history and all documented simplifications.
+
+### Known simplifications
 
 - Single gateway/worker replica in `docker-compose.yml` (the Redis pub/sub fan-out exists so adding replicas later doesn't require a rewrite, but it isn't load-tested here).
-- `/guild` and `/rp` chat reach every locally-connected client rather than being filtered by zone/proximity — `/party` is properly scoped by `PartyID`.
-- No inventory/spellbook persistence per character yet (the original Phase 1 spec calls for it; this rebuild prioritized the RP/voting/dungeon-async pipeline). `ability_*` columns and `honor_log` are there; inventory is a natural next migration.
-- There's no party-formation flow yet — `account.partyId` exists in the schema and is honored everywhere (chat scoping, vote rooms, dungeon instances), but nothing currently sets it, so every account is effectively solo. Wiring up an invite/accept flow is the natural next step before party voting/dungeons can be exercised with more than one player.
-- Combat is simplified 5e: one attack per character per round (no multiattack, no spell slots/cantrip distinction — Wizards just roll a different damage die), no conditions, no saving throws, and a losing encounter fully heals the character on retreat rather than implementing death saves. Boss monsters are tuned for solo play, well below their real SRD Challenge Rating (see "Combat and the Narrator" above).
+- `/guild` and `/rp` chat reach every locally-connected client rather than being filtered by location — `/party` is properly scoped.
+- No inventory/spellbook persistence per character yet.
+- Combat is one attack per turn (no multiattack, no spell slot tracking — Wizards roll a different damage die instead of managing slots), no conditions or saving throws. A losing encounter heals the defeated party on retreat instead of implementing death saves. Boss monsters are tuned below their real SRD CR because party size is variable and a true CR 2 monster is unwinnable solo.
+- Mid-fight turn state (`*combat.Encounter`) lives in gateway memory only — a gateway restart mid-fight loses the current turn order, but room-cleared progress (and dungeon existence) is persisted to Postgres so a restarted party can re-enter and replay that specific room.
 
 ## Local development
 

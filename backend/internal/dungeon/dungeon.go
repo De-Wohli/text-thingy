@@ -1,7 +1,8 @@
 // Package dungeon implements the Procedural Dungeon Generation Engine: a
-// 15x15 grid split into start/hallway/treasure/boss rooms, populated with
-// SRD-derived monsters sized to the active character's level via an XP
-// budget (the "CR Budget Math" requirement).
+// fixed start/hallway/treasure/boss room sequence (rendered by the client
+// as a room-card track, not a literal grid — see frontend's DungeonView),
+// populated with SRD-derived monsters sized to the active character's
+// level via an XP budget (the "CR Budget Math" requirement).
 package dungeon
 
 import (
@@ -10,37 +11,13 @@ import (
 	"dnd5e-web/backend/internal/models"
 )
 
-const Size = models.DungeonSize
-
-// buildRooms splits the grid into four quadrant-rooms. A simple
-// deterministic split rather than full cellular automata — sufficient for
-// the prototype while leaving room for a richer generator later.
 func buildRooms() []models.DungeonRoom {
-	half := Size / 2
 	return []models.DungeonRoom{
-		{Type: models.RoomStart, X: 1, Y: 1, Width: half - 2, Height: half - 2, Cleared: true},
-		{Type: models.RoomHallway, X: half - 1, Y: 1, Width: 2, Height: Size - 2, Cleared: false},
-		{Type: models.RoomTreasure, X: 1, Y: half + 1, Width: half - 2, Height: half - 2, Cleared: false},
-		{Type: models.RoomBoss, X: half + 1, Y: half + 1, Width: half - 2, Height: half - 2, Cleared: false},
+		{Type: models.RoomStart, Cleared: true},
+		{Type: models.RoomHallway, Cleared: false},
+		{Type: models.RoomTreasure, Cleared: false},
+		{Type: models.RoomBoss, Cleared: false},
 	}
-}
-
-func carveGrid(rooms []models.DungeonRoom) [][]string {
-	grid := make([][]string, Size)
-	for y := range grid {
-		grid[y] = make([]string, Size)
-		for x := range grid[y] {
-			grid[y][x] = "wall"
-		}
-	}
-	for _, room := range rooms {
-		for y := room.Y; y < room.Y+room.Height && y < Size; y++ {
-			for x := room.X; x < room.X+room.Width && x < Size; x++ {
-				grid[y][x] = "floor"
-			}
-		}
-	}
-	return grid
 }
 
 // pickEncounterForLevel1 always returns at least one monster for
@@ -99,7 +76,6 @@ func pickBossEncounter() []models.Monster {
 // level still resolves against it.
 func Generate(id, partyID string, characterLevel int) models.Dungeon {
 	rooms := buildRooms()
-	grid := carveGrid(rooms)
 
 	encounters := make([]models.DungeonEncounter, 0, len(rooms))
 	for _, room := range rooms {
@@ -115,9 +91,6 @@ func Generate(id, partyID string, characterLevel int) models.Dungeon {
 	return models.Dungeon{
 		ID:         id,
 		PartyID:    partyID,
-		Width:      Size,
-		Height:     Size,
-		Grid:       grid,
 		Rooms:      rooms,
 		Encounters: encounters,
 		Resolved:   false,

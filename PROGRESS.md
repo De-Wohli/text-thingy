@@ -3,9 +3,9 @@
 Living status file for this project. Update it whenever a work session changes what's done, what's verified, or what's planned — this is the first thing to read (and update) at the start of any new agentic or human session.
 
 **Repo:** https://github.com/De-Wohli/text-thingy
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-01
 
-## Current status: Phase 1 + RP & Voting rebuild — implemented and verified end-to-end locally, not deployed anywhere live
+## Current status: Full VTT rework — location graph, party system, turn-based combat, hot-dropping, skill checks — implemented and verified end-to-end locally, not deployed anywhere live
 
 The full stack described in `outline.md` (Go gateway/worker, RabbitMQ, Redis, Postgres, React/Tailwind frontend) has been implemented and **actually run together** via `docker compose up --build` — not just compiled in isolation. See "2026-06-30 — Full stack verification" below for what was exercised. Nothing has been deployed anywhere live (no hosting target chosen yet — CI only builds/publishes images to GHCR, see `README.md` § CI/CD).
 
@@ -48,12 +48,13 @@ See `README.md` for the full breakdown. Quick summary:
 - `.github/workflows/docker-publish.yml` — builds + pushes `gateway`/`worker`/`frontend` images to GHCR on push to `main`.
 
 ## Known gaps (by design, see README "Known simplifications")
-- No party-formation flow — `account.partyId` is wired everywhere it's needed (chat scoping, voting, dungeons) but nothing currently sets it, so every account is effectively solo.
-- No inventory/spellbook persistence per character (original Phase 1 spec wanted this; deferred to keep the RP/voting/async-dungeon pipeline in scope).
-- `/guild` and `/rp` chat broadcast to every locally-connected client rather than being filtered by zone/proximity. `/party` is properly scoped.
-- Single gateway/worker replica assumed; Redis pub/sub fan-out exists for future multi-replica scaling but is untested under more than one instance.
-- No live deploy target wired up (user chose "CI + GHCR images only" over an actual hosting target — see `README.md` § CI/CD).
-- Combat is simplified 5e (one attack/round, no multiattack/spell-slots/conditions/saving throws); a lost encounter fully heals on retreat instead of implementing death saves; boss monsters are tuned well below their real SRD CR because there's no party to split the action economy with yet (see README "Combat and the Narrator").
+- No inventory/spellbook persistence per character (deferred since initial build; `ability_*` and `honor_log` columns are there, inventory is the natural next migration).
+- `/guild` and `/rp` chat broadcast to every locally-connected client rather than being filtered by location — `/party` is properly scoped.
+- Single gateway/worker replica assumed; Redis pub/sub fan-out exists for future multi-replica scaling but is untested.
+- No live deploy target wired up (CI only builds/publishes images to GHCR).
+- Combat is simplified 5e: one attack per turn (no multiattack, no real spell-slot economy), no conditions or saving throws, a losing encounter heals on retreat instead of implementing death saves, boss monsters tuned below real SRD CR.
+- Mid-fight turn state is in-memory only (gateway restart mid-fight resets that one fight's turn order; room-cleared progress persists via Postgres).
+- Party gold rewards go to the dungeon-resolver only, not split.
 
 ## Session log
 
@@ -104,10 +105,29 @@ See `README.md` for the full breakdown. Quick summary:
 - Visually verified in an actual browser via Playwright (same approach as the prior session): screenshotted the combat log rendering (attack-by-attack d20 math, monster AC tags, victory/defeat narration) and confirmed the "Return to City Gates" button now actually closes the dungeon panel and returns to the overworld with updated gold/HP. Zero console errors.
 - Rebuilt and verified all three changed Docker images (gateway, worker, frontend).
 
+### 2026-07-01 — Full VTT rework (location graph, party system, turn-based combat, hot-dropping, skill checks)
+- User requested reworking the game into an actual multiplayer VTT: party play, hot-dropping, automated DM narrator, real turn-based 5e combat, non-combat skill checks, location-graph world (not tile-grid).
+- Ran a planning session (`EnterPlanMode`) to clarify: turn-based combat confirmed; narration stays template-based with a future-LLM extensibility seam; hot-dropping = walk to location + party up (not remote teleport); map = "whatever fits best with 5e and the automated DM" → decided on location graph.
+- Replaced the tile-grid overworld (WASD, coordinate system, adjacency logic) with `backend/internal/world` — a hub-and-spoke location graph: Town Square → Guild Hall, Tavern, Market, Old Mine Entrance. Travel is choosing a connected node, not stepping tile by tile. The backend migration (0002) drops coord_x/coord_y, adds location_id, creates `parties` table, drops the now-vestigial dungeon grid column.
+- Built a party system: invite by display name, accept/decline via the WS protocol, party members share a `party_id` for chat/dungeon/vote scoping. Added `backend/cmd/gateway/party.go` + `frontend/src/components/PartyPanel.tsx`.
+- Rewrote `backend/internal/combat` from a single synchronous `Resolve()` into a stateful `Encounter` engine with real initiative order, turn-by-turn actions (Attack/Dodge/Flee), monster auto-turns, and a 60-second AFK timeout.
+- Added `backend/internal/skillcheck` (d20 + ability modifier + proficiency vs. DC, per-skill class proficiency, 6 skills modeled) and surfaced pre-combat skill-check buttons in the dungeon UI.
+- Extended `backend/internal/narrator` with: a swappable `Backend` interface (future Ollama/LLM hook without changing call sites), new scene-description/skill-check/party-formed/dodge/flee functions, and a `narrator.EnterLocation` for travel narration.
+- Built hot-dropping: a party member calling ENTER_DUNGEON at the mine entrance joins the party's existing in-progress dungeon run (same dungeon ID, same room-cleared state, same combat encounter if a fight is underway) rather than generating a new one. Found and fixed a related bug: `DUNGEON_READY` was incorrectly broadcast to the whole party when anyone entered, opening the dungeon UI on members who hadn't traveled there yet. Fixed: only the triggering account receives the initial notification; others get it via their own hot-drop call.
+- Added an onboarding screen (`frontend/src/components/Onboarding.tsx`) since every account previously silently defaulted to "Adventurer" as their display name, breaking party-invite-by-name for friends playing together. Now first-time users are prompted for a name before account creation.
+- **Four more bugs found by running the new code live:**
+  1. `combat.Encounter.Log`/`Combatants` initialized as nil → JSON null → `combatants.filter()`/`log.map()` crash in CombatView. Third occurrence of this exact bug class in this codebase (previously hit ListCharacters, Resolve().Rounds). Fixed in `NewEncounter` with explicit `[]T{}` initialization; regression test added; named explicitly in a code comment.
+  2. `DUNGEON_READY` party-broadcast (see above).
+  3. Party gold reward split non-existent (still goes to one player) — documented as a known gap, not fixed.
+  4. Account display name defaulted to "Adventurer" for all accounts — see onboarding fix above.
+- Backend: `go build/vet/test/gofmt` all clean. Frontend: `tsc/eslint/vitest/build` all clean.
+- Two-account WebSocket protocol test (Node script with two concurrent WS connections): full flow confirmed: onboarding → party invite/accept → both create characters → Brak travels to mine entrance → enters dungeon → Mira hot-drops into SAME dungeon instance (confirmed same ID) → START_ENCOUNTER → turn-based combat with both players alternating turns + monster auto-resolving its turns → 3 rooms cleared → DUNGEON_RESOLVED. Zero server errors. Confirmed durable persistence via `psql`.
+- Two-browser-context Playwright visual test: two separate incognito-style browser contexts with distinct names (Brak, Mira) confirmed working — screenshots show the onboarding screen, world map with travel buttons, party panel with both members and HP, contextual "Here" actions per location kind, dungeon view with skill-check buttons, and the CombatView showing "Round 1 / Waiting on Mira..." correctly awaiting Mira's turn while Attack/Dodge/Flee was shown on her screen. Attack log shows both Mira and Brak contributing hits. Zero console errors.
+
 ## Next steps (suggested, not started)
 1. Confirm GitHub Actions are green on the latest pushed commits.
-2. Decide on a party-formation flow (invite/accept) so `/party` chat and party voting can actually be exercised with 2+ players — this is the biggest remaining gap between "implemented" and "matches the full outline.md design." It would also let boss monsters be tuned back up toward their real SRD CR.
-3. Decide whether to pursue inventory/spellbook persistence (deferred Phase 1 scope).
-4. If/when a real hosting target is chosen, extend `docker-publish.yml` with an actual deploy step.
-5. A responsive/mobile pass on the new UI — only verified at a 1280×900 desktop viewport so far.
-6. Combat is currently melee-only with no spell-slot economy for the Wizard (cantrip reuses the same per-round attack loop as the Fighter's weapon). A real spellcasting system (slots, save-based spells, ranged positioning) is a natural next combat upgrade.
+2. A responsive/mobile pass on the new UI — only verified at desktop viewport so far.
+3. Combat spell-slot economy for Wizards: currently uses a cantrip-style "same melee loop, different damage die" — a real spell system (slots, save-based spells, ranged positioning) is the natural next combat upgrade.
+4. Inventory/spellbook persistence (deferred since initial build).
+5. If/when a real hosting target is chosen, extend `docker-publish.yml` with an actual deploy step.
+6. Party gold splitting (currently the "Return to City Gates" account gets all gold from a party dungeon run).

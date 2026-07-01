@@ -8,6 +8,8 @@ import (
 
 	"dnd5e-web/backend/internal/combat"
 	"dnd5e-web/backend/internal/models"
+	"dnd5e-web/backend/internal/skillcheck"
+	"dnd5e-web/backend/internal/world"
 )
 
 // Envelope is the generic shape every inbound client message arrives in;
@@ -19,9 +21,8 @@ type Envelope struct {
 
 // --- Inbound (client -> gateway) payloads ---
 
-type MovePayload struct {
-	DX int `json:"dx"`
-	DY int `json:"dy"`
+type TravelPayload struct {
+	ToLocationID models.LocationID `json:"toLocationId"`
 }
 
 type SwapCharacterPayload struct {
@@ -39,6 +40,14 @@ type ChatPayload struct {
 	Body    string             `json:"body"`
 }
 
+type InviteToPartyPayload struct {
+	TargetDisplayName string `json:"targetDisplayName"`
+}
+
+type RespondToPartyInvitePayload struct {
+	InviteID string `json:"inviteId"`
+}
+
 type MakeChoicePayload struct {
 	PromptID string `json:"promptId"`
 	OptionID string `json:"optionId"`
@@ -49,8 +58,18 @@ type CastVotePayload struct {
 	OptionID string `json:"optionId"`
 }
 
-type ClearDungeonRoomPayload struct {
+type StartEncounterPayload struct {
 	RoomType models.DungeonRoomType `json:"roomType"`
+}
+
+type CombatActionPayload struct {
+	Action   string `json:"action"` // "attack" | "dodge" | "flee"
+	TargetID string `json:"targetId,omitempty"`
+}
+
+type SkillCheckPayload struct {
+	Skill   models.Skill `json:"skill"`
+	Context string       `json:"context"`
 }
 
 // --- Outbound (gateway -> client) messages ---
@@ -73,6 +92,41 @@ type ChatBroadcast struct {
 
 func NewChatBroadcast(msg models.ChatMessage) ChatBroadcast {
 	return ChatBroadcast{Type: "CHAT_MESSAGE", Message: msg}
+}
+
+// PresentAccount is a lightweight roster entry for "who else is here" —
+// shown at a location (to invite to a party) or in a dungeon run.
+type PresentAccount struct {
+	AccountID   string `json:"accountId"`
+	DisplayName string `json:"displayName"`
+}
+
+type LocationState struct {
+	Type      string           `json:"type"`
+	Location  world.Location   `json:"location"`
+	Present   []PresentAccount `json:"present"`
+	Narration string           `json:"narration,omitempty"`
+}
+
+type PartyInviteReceived struct {
+	Type            string `json:"type"`
+	InviteID        string `json:"inviteId"`
+	FromAccountID   string `json:"fromAccountId"`
+	FromDisplayName string `json:"fromDisplayName"`
+}
+
+type PartyMember struct {
+	AccountID     string `json:"accountId"`
+	DisplayName   string `json:"displayName"`
+	CharacterName string `json:"characterName,omitempty"`
+	HPCurrent     int    `json:"hpCurrent,omitempty"`
+	HPMax         int    `json:"hpMax,omitempty"`
+}
+
+type PartyState struct {
+	Type    string        `json:"type"`
+	PartyID string        `json:"partyId,omitempty"` // empty when not in a party
+	Members []PartyMember `json:"members"`
 }
 
 type ChoiceState struct {
@@ -111,9 +165,20 @@ func NewDungeonReady(d models.Dungeon, narration string) DungeonReady {
 	return DungeonReady{Type: "DUNGEON_READY", Dungeon: d, Narration: narration}
 }
 
-// RoomResolved is sent after CLEAR_DUNGEON_ROOM actually fights the
-// encounter (see internal/combat) — it carries the full attack-by-attack
-// log so the client can render a combat log, not just a before/after state.
+// EncounterState is broadcast to the whole party every time the turn
+// order advances — initiative, HP, whose turn it is, and the full combat
+// log so a client that just hot-dropped in can render history too.
+type EncounterState struct {
+	Type               string                 `json:"type"`
+	Combatants         []*combat.Combatant    `json:"combatants"`
+	CurrentCombatantID string                 `json:"currentCombatantId,omitempty"`
+	Round              int                    `json:"round"`
+	Log                []combat.AttackRoll    `json:"log"`
+	RoomType           models.DungeonRoomType `json:"roomType"`
+}
+
+// RoomResolved is sent once a room's encounter ends — carries the final
+// combat log so the client can render the outcome.
 type RoomResolved struct {
 	Type      string                 `json:"type"`
 	RoomType  models.DungeonRoomType `json:"roomType"`
@@ -124,11 +189,17 @@ type RoomResolved struct {
 }
 
 // DungeonResolved tells the client the instance is fully cleared and it's
-// safe to close the dungeon view and return to the overworld.
+// safe to close the dungeon view and return to the world map.
 type DungeonResolved struct {
 	Type        string `json:"type"`
 	Narration   string `json:"narration"`
 	GoldAwarded int    `json:"goldAwarded"`
+}
+
+type SkillCheckResult struct {
+	Type      string            `json:"type"`
+	Result    skillcheck.Result `json:"result"`
+	Narration string            `json:"narration"`
 }
 
 type ErrorMessage struct {

@@ -6,82 +6,206 @@ import (
 	"dnd5e-web/backend/internal/models"
 )
 
-func sampleFighter() models.Character {
+func sampleFighter(id, name string) models.Character {
 	return models.Character{
-		ID:            "char-1",
-		Name:          "Brak",
+		ID:            id,
+		AccountID:     "account-" + id,
+		Name:          name,
 		ClassID:       models.ClassFighter,
 		Level:         1,
-		HPCurrent:     10,
-		HPMax:         10,
-		AbilityScores: models.AbilityScores{Str: 16, Dex: 12, Con: 14, Int: 10, Wis: 10, Cha: 10},
+		HPCurrent:     12,
+		HPMax:         12,
+		AbilityScores: models.AbilityScores{Str: 16, Dex: 14, Con: 15, Int: 8, Wis: 12, Cha: 10},
 	}
 }
 
 func weakMonster() models.Monster {
-	// Trivially easy to hit and kill so victory is reachable in bounded time.
 	return models.Monster{ID: "training-dummy", Name: "Training Dummy", ArmorClass: 1, HP: 1, AttackBonus: -10, DamageDie: "1d4"}
 }
 
-func TestResolveAlwaysTerminates(t *testing.T) {
-	character := sampleFighter()
-	monsters := []models.Monster{weakMonster(), weakMonster()}
-	for i := 0; i < 50; i++ {
-		result := Resolve(character, monsters)
-		if len(result.Rounds) == 0 {
-			t.Fatal("expected at least one attack roll")
+func unbeatableMonster() models.Monster {
+	return models.Monster{ID: "ancient-horror", Name: "Ancient Horror", ArmorClass: 99, HP: 999, AttackBonus: 99, DamageDie: "10d10+50"}
+}
+
+func TestNewEncounterFieldsAreNeverNilSlices(t *testing.T) {
+	// Regression: a nil Go slice serializes to JSON `null`, and the
+	// frontend calls .map()/.filter() on Combatants/Log without a null
+	// guard — this exact bug class has bitten ListCharacters and
+	// combat.Resolve's Rounds field earlier in this codebase's history.
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	if e.Combatants == nil {
+		t.Fatal("expected Combatants to be a non-nil slice")
+	}
+	if e.Log == nil {
+		t.Fatal("expected Log to be a non-nil slice, even before any attack has happened")
+	}
+}
+
+func TestNewEncounterOrdersByInitiativeDescending(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	for i := 1; i < len(e.Combatants); i++ {
+		if e.Combatants[i-1].Initiative < e.Combatants[i].Initiative {
+			t.Fatalf("combatants not sorted by initiative descending: %+v", e.Combatants)
 		}
 	}
 }
 
-func TestResolveVictoryDefeatsAllMonsters(t *testing.T) {
-	character := sampleFighter()
-	monsters := []models.Monster{weakMonster()}
-	result := Resolve(character, monsters)
-	if !result.Victory {
-		t.Fatalf("expected victory against a trivial monster, got defeat: %+v", result)
+func TestAttackOnlyAllowedOnYourTurn(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	current := e.Current()
+	if current == nil {
+		t.Fatal("expected a current combatant")
 	}
-	if len(result.MonstersDefeated) != 1 {
-		t.Fatalf("expected 1 monster defeated, got %d", len(result.MonstersDefeated))
+	// Find a combatant who is NOT current.
+	var notCurrent *Combatant
+	for _, c := range e.Combatants {
+		if c != current {
+			notCurrent = c
+		}
 	}
-}
-
-func TestResolveDefeatClampsHPToOneNotZero(t *testing.T) {
-	character := sampleFighter()
-	character.HPCurrent = 10
-	character.HPMax = 10
-	// Overwhelming monster: impossible to hit (AC 99), guaranteed to hit back.
-	overwhelming := models.Monster{ID: "ancient-horror", Name: "Ancient Horror", ArmorClass: 99, HP: 999, AttackBonus: 99, DamageDie: "10d10+50"}
-	result := Resolve(character, []models.Monster{overwhelming})
-	if result.Victory {
-		t.Fatal("expected defeat against an unbeatable monster")
+	if notCurrent == nil {
+		t.Skip("only one combatant, can't test out-of-turn rejection")
 	}
-	if result.CharacterHPAfter != 1 {
-		t.Fatalf("expected HP clamped to 1 on defeat, got %d", result.CharacterHPAfter)
+	if _, err := e.Attack(notCurrent.ID, current.ID); err != ErrNotYourTurn {
+		t.Fatalf("expected ErrNotYourTurn, got %v", err)
 	}
 }
 
-func TestResolveZeroHPCharacterStartsAtFullHP(t *testing.T) {
-	character := sampleFighter()
-	character.HPCurrent = 0 // shouldn't happen in practice, but guard against it
-	monsters := []models.Monster{weakMonster()}
-	result := Resolve(character, monsters)
-	if result.CharacterHPBefore != 0 {
-		t.Fatalf("expected CharacterHPBefore to record the input value, got %d", result.CharacterHPBefore)
+func TestAttackDefeatsWeakMonster(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	current := e.Current()
+	if current == nil || current.Kind != KindPlayer {
+		t.Fatalf("expected the fighter to act first against a trivial monster, got %+v", current)
 	}
-	if !result.Victory {
-		t.Fatal("expected a 0-HP character to be treated as full HP for the fight, not an instant loss")
+	if _, err := e.Attack(current.ID, findMonster(e).ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !findMonster(e).Defeated {
+		t.Fatal("expected the trivial monster to be defeated in one hit")
+	}
+	over, victory := e.Outcome()
+	if !over || !victory {
+		t.Fatalf("expected victory once the only monster is defeated, got over=%v victory=%v", over, victory)
 	}
 }
 
-func TestResolveEmptyEncounterIsVacuousVictoryWithNonNilRounds(t *testing.T) {
-	character := sampleFighter()
-	result := Resolve(character, []models.Monster{})
-	if !result.Victory {
-		t.Fatal("expected an empty encounter to resolve as an automatic victory")
+func findMonster(e *Encounter) *Combatant {
+	for _, c := range e.Combatants {
+		if c.Kind == KindMonster {
+			return c
+		}
 	}
-	if result.Rounds == nil {
-		t.Fatal("expected Rounds to be an empty slice, not nil — nil serializes to JSON null and crashes the frontend's .map()")
+	return nil
+}
+
+func TestDodgeGivesDisadvantageToAttacker(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	player := e.find("c1")
+	if e.Current() != player {
+		t.Skip("monster acted first this run, skipping deterministic dodge check")
+	}
+	if err := e.Dodge(player.ID); err != nil {
+		t.Fatalf("unexpected error dodging: %v", err)
+	}
+	if !player.Dodging {
+		t.Fatal("expected player.Dodging to be true after Dodge()")
+	}
+}
+
+func TestFleeRemovesCombatantFromTurnOrderWithoutEndingFight(t *testing.T) {
+	// Deliberately a weak monster, not unbeatable: an unbeatable monster
+	// going first could one-shot a player during the automatic
+	// leading-turn resolution, before either player gets to act — that
+	// would make "two players, one flees" collapse to "one player left"
+	// for reasons unrelated to what this test is checking.
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak"), sampleFighter("c2", "Mira")}, []models.Monster{weakMonster()})
+	current := e.Current()
+	if current == nil || current.Kind != KindPlayer {
+		t.Fatal("expected a player to act first against trivially-easy-to-go-first setup")
+	}
+	if err := e.Flee(current.ID); err != nil {
+		t.Fatalf("unexpected error fleeing: %v", err)
+	}
+	if !current.Fled {
+		t.Fatal("expected Fled to be true")
+	}
+	if current.Alive() {
+		t.Fatal("a fled combatant should not be Alive()")
+	}
+	over, _ := e.Outcome()
+	if over {
+		t.Fatal("fleeing one of two players should not end the fight while the other is still up")
+	}
+}
+
+func TestOutcomeDefeatWhenAllPlayersDown(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{unbeatableMonster()})
+	for i := 0; i < 50; i++ {
+		if over, _ := e.Outcome(); over {
+			break
+		}
+		current := e.Current()
+		if current == nil || current.Kind != KindPlayer {
+			t.Fatalf("expected only the player to ever need manual action, got %+v", current)
+		}
+		if _, err := e.Attack(current.ID, findMonster(e).ID); err != nil {
+			t.Fatalf("unexpected attack error: %v", err)
+		}
+		e.AdvanceTurn()
+	}
+	over, victory := e.Outcome()
+	if !over {
+		t.Fatal("expected the fight to be over against an unbeatable monster within 50 rounds")
+	}
+	if victory {
+		t.Fatal("expected defeat, not victory, against an unbeatable monster")
+	}
+}
+
+func TestAdvanceTurnAutoResolvesMonsterTurns(t *testing.T) {
+	// Two players, one monster that can't possibly win — the monster's
+	// turn (whenever it comes up) must resolve automatically without any
+	// caller action, and control must always return on a player's turn.
+	e := NewEncounter(
+		[]models.Character{sampleFighter("c1", "Brak"), sampleFighter("c2", "Mira")},
+		[]models.Monster{weakMonster()},
+	)
+	for i := 0; i < 10; i++ {
+		if over, _ := e.Outcome(); over {
+			return
+		}
+		current := e.Current()
+		if current == nil {
+			t.Fatal("expected a current combatant while the fight is ongoing")
+		}
+		if current.Kind != KindPlayer {
+			t.Fatalf("AdvanceTurn should never leave a monster as the current actor, got %+v", current)
+		}
+		if _, err := e.Attack(current.ID, findMonster(e).ID); err != nil {
+			t.Fatalf("unexpected attack error: %v", err)
+		}
+		e.AdvanceTurn()
+	}
+}
+
+func TestUnknownCombatantErrors(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	if _, err := e.Attack("nobody", "also-nobody"); err != ErrUnknownCombatant {
+		t.Fatalf("expected ErrUnknownCombatant, got %v", err)
+	}
+	if err := e.Dodge("nobody"); err != ErrUnknownCombatant {
+		t.Fatalf("expected ErrUnknownCombatant from Dodge, got %v", err)
+	}
+	if err := e.Flee("nobody"); err != ErrUnknownCombatant {
+		t.Fatalf("expected ErrUnknownCombatant from Flee, got %v", err)
+	}
+}
+
+func TestEmptyMonsterListIsVacuousVictory(t *testing.T) {
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{})
+	over, victory := e.Outcome()
+	if !over || !victory {
+		t.Fatalf("expected a vacuous victory with no monsters, got over=%v victory=%v", over, victory)
 	}
 }
 

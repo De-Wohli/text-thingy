@@ -52,7 +52,9 @@ export type Character = {
 
 export type AlignmentBand = 'good' | 'neutral' | 'evil'
 
-export type Coordinate = { x: number; y: number }
+// A node in the world's location graph (see backend/internal/world) — the
+// overworld is a small hub-and-spoke graph, not a tile grid.
+export type LocationId = string
 
 export type Account = {
   id: string
@@ -60,11 +62,19 @@ export type Account = {
   honor: number
   gold: number
   activeCharacterId: string | null
-  coordinate: Coordinate
+  locationId: LocationId
   partyId: string | null
 }
 
-export type TileType = 'floor' | 'wall' | 'water' | 'guild' | 'tavern' | 'npc' | 'poi'
+export type LocationKind = 'hub' | 'guild_hall' | 'tavern' | 'npc' | 'quest_hook'
+
+export type Location = {
+  id: LocationId
+  name: string
+  description: string
+  kind: LocationKind
+  connections: LocationId[]
+}
 
 export type ChatChannel = 'global' | 'guild' | 'party' | 'rp' | 'narrator'
 
@@ -88,14 +98,12 @@ export type ChoiceOption = {
 
 export type ChoiceMode = 'solo' | 'party'
 
+export type Skill = 'perception' | 'investigation' | 'insight' | 'stealth' | 'arcana' | 'athletics'
+
 export type DungeonRoomType = 'start' | 'hallway' | 'treasure' | 'boss'
 
 export type DungeonRoom = {
   type: DungeonRoomType
-  x: number
-  y: number
-  width: number
-  height: number
   cleared: boolean
 }
 
@@ -126,15 +134,40 @@ export type DungeonEncounter = {
   monsters: Monster[]
 }
 
-export type DungeonTile = 'wall' | 'floor'
-
 export type Dungeon = {
   id: string
   partyId: string
-  width: number
-  height: number
-  grid: DungeonTile[][]
   rooms: DungeonRoom[]
   encounters: DungeonEncounter[]
   resolved: boolean
+}
+
+export type CombatantKind = 'player' | 'monster'
+
+export type Combatant = {
+  id: string
+  kind: CombatantKind
+  accountId?: string
+  name: string
+  initiative: number
+  hp: number
+  maxHp: number
+  ac: number
+  attackBonus: number
+  dodging: boolean
+  fled: boolean
+  defeated: boolean
+}
+
+export type CombatActionType = 'attack' | 'dodge' | 'flee'
+
+export type SkillCheckResultData = {
+  skill: Skill
+  d20: number
+  abilityModifier: number
+  proficiencyBonus: number
+  total: number
+  dc: number
+  proficient: boolean
+  success: boolean
 }

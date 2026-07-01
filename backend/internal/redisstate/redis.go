@@ -1,18 +1,17 @@
 // Package redisstate wraps Redis for the transient, real-time state the
-// design calls out explicitly: live chat/vote room membership and player
-// coordinates. RabbitMQ (see internal/queue) owns durable async work
-// instead; Postgres (see internal/store) owns durable account/character data.
+// design calls out explicitly: live chat/vote room membership. RabbitMQ
+// (see internal/queue) owns durable async work instead; Postgres (see
+// internal/store) owns durable account/character data. Player location
+// presence is gateway-in-memory, not Redis-cached — see server.go's
+// presence registry.
 package redisstate
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	"dnd5e-web/backend/internal/models"
 )
 
 type Client struct {
@@ -29,35 +28,6 @@ func (c *Client) Ping(ctx context.Context) error {
 
 func (c *Client) Close() error {
 	return c.rdb.Close()
-}
-
-const coordinateTTL = 24 * time.Hour
-
-func coordinateKey(accountID string) string {
-	return fmt.Sprintf("coord:%s", accountID)
-}
-
-func (c *Client) SetCoordinate(ctx context.Context, accountID string, coord models.Coordinate) error {
-	data, err := json.Marshal(coord)
-	if err != nil {
-		return err
-	}
-	return c.rdb.Set(ctx, coordinateKey(accountID), data, coordinateTTL).Err()
-}
-
-func (c *Client) GetCoordinate(ctx context.Context, accountID string) (models.Coordinate, bool, error) {
-	data, err := c.rdb.Get(ctx, coordinateKey(accountID)).Bytes()
-	if err == redis.Nil {
-		return models.Coordinate{}, false, nil
-	}
-	if err != nil {
-		return models.Coordinate{}, false, err
-	}
-	var coord models.Coordinate
-	if err := json.Unmarshal(data, &coord); err != nil {
-		return models.Coordinate{}, false, err
-	}
-	return coord, true, nil
 }
 
 // Publish marshals payload to JSON and publishes it on channel — used to

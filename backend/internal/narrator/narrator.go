@@ -1,26 +1,75 @@
 // Package narrator generates Game-Master-voiced flavor text for game
-// events (entering a dungeon, combat swings, room outcomes, NPC choices,
-// party votes). It's template-based, not an LLM call — deliberately so,
-// to keep the gateway's response latency and dependency surface small —
-// but picks randomly among a handful of phrasings per event so the table
-// doesn't see the exact same line twice in a row.
+// events (travel, entering a dungeon, combat swings, room outcomes, skill
+// checks, NPC choices, party votes). It's template-based, not an LLM call
+// — deliberately so, to keep the gateway's response latency and dependency
+// surface small — but picks randomly among a handful of phrasings per
+// event so the table doesn't see the exact same line twice in a row.
+//
+// The random-pick step is behind the small Backend interface below
+// specifically so a future generative backend (e.g. a local Ollama model)
+// can be swapped in via Active without touching every call site — it
+// isn't built yet, this is just the seam for it.
 package narrator
 
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 )
 
-func pick(options []string) string {
+// Backend supplies the line for a given set of candidate phrasings. The
+// template backend picks one at random; a future LLM-backed implementation
+// could instead use the options as a style reference and generate fresh
+// text, or simply rephrase one of them.
+type Backend interface {
+	Pick(options []string) string
+}
+
+type templateBackend struct{}
+
+func (templateBackend) Pick(options []string) string {
 	return options[rand.Intn(len(options))]
 }
 
-// DungeonEntry narrates stepping through a [?] point of interest.
+// Active is the narration backend in use. Swap it (e.g. at startup, based
+// on an env var) to change how every narrator.* function below resolves
+// its text — nothing else in the gateway needs to change.
+var Active Backend = templateBackend{}
+
+func pick(options []string) string {
+	return Active.Pick(options)
+}
+
+// EnterLocation narrates arriving somewhere on the world map.
+func EnterLocation(characterName, locationName, locationDescription string) string {
+	return pick([]string{
+		fmt.Sprintf("%s arrives at %s. %s", characterName, locationName, locationDescription),
+		fmt.Sprintf("%s makes their way to %s. %s", characterName, locationName, locationDescription),
+	})
+}
+
+// DungeonEntry narrates stepping through a quest hook into a dungeon.
 func DungeonEntry(characterName string) string {
 	return pick([]string{
 		fmt.Sprintf("The ground gives way to old stonework as %s descends into the dark. Torchlight flickers ahead.", characterName),
 		fmt.Sprintf("%s pushes through a curtain of roots into a forgotten passage. The air turns cold.", characterName),
 		fmt.Sprintf("A draft carries the smell of damp earth as %s steps over the threshold. Somewhere below, something stirs.", characterName),
+	})
+}
+
+// SceneDescription narrates arriving in a dungeon room, describing any
+// monsters present.
+func SceneDescription(roomLabel string, monsterNames []string) string {
+	if len(monsterNames) == 0 {
+		return pick([]string{
+			fmt.Sprintf("The %s is empty, quiet but for your own footsteps.", roomLabel),
+			fmt.Sprintf("Nothing stirs in the %s — for now.", roomLabel),
+		})
+	}
+	foes := strings.Join(monsterNames, ", ")
+	return pick([]string{
+		fmt.Sprintf("The %s opens up ahead. %s block the way, weapons ready.", roomLabel, foes),
+		fmt.Sprintf("You round the corner into the %s — %s are already watching you.", roomLabel, foes),
 	})
 }
 
@@ -48,6 +97,22 @@ func AttackSwing(attacker, target string, hit, critical bool, damage int) string
 	}
 }
 
+// Dodge narrates a combatant taking the Dodge action.
+func Dodge(name string) string {
+	return pick([]string{
+		fmt.Sprintf("%s drops into a defensive stance, watching for the next strike.", name),
+		fmt.Sprintf("%s keeps light on their feet, ready to weave away from any attack.", name),
+	})
+}
+
+// Flee narrates a combatant retreating from a fight.
+func Flee(name string) string {
+	return pick([]string{
+		fmt.Sprintf("%s breaks off and retreats from the fight.", name),
+		fmt.Sprintf("%s falls back, putting distance between themself and the enemy.", name),
+	})
+}
+
 // RoomVictory narrates a cleared encounter.
 func RoomVictory(characterName, roomLabel string, defeated []string) string {
 	foes := "the last of the foes"
@@ -61,8 +126,8 @@ func RoomVictory(characterName, roomLabel string, defeated []string) string {
 	})
 }
 
-// RoomDefeat narrates a lost encounter (no permadeath — the character
-// retreats and is stabilized, see internal/combat for the rules).
+// RoomDefeat narrates a lost encounter (no permadeath — the party retreats
+// and is stabilized, see internal/combat for the rules).
 func RoomDefeat(characterName, roomLabel string) string {
 	return pick([]string{
 		fmt.Sprintf("%s staggers, overwhelmed, and is forced to retreat from the %s. The wounds will heal, but the foe still stands.", characterName, roomLabel),
@@ -77,6 +142,28 @@ func DungeonResolved(characterName string, goldAwarded int) string {
 		fmt.Sprintf("The depths fall quiet. %s emerges into daylight, %d gold heavier and a little wiser.", characterName, goldAwarded),
 		fmt.Sprintf("With the boss defeated, %s loots the chamber — %d gold for the Guild vault — and makes for the surface.", characterName, goldAwarded),
 		fmt.Sprintf("The dungeon is cleared. %s returns to the city gates carrying %d gold in spoils.", characterName, goldAwarded),
+	})
+}
+
+// SkillCheckOutcome narrates the result of a non-combat ability check.
+func SkillCheckOutcome(characterName, context string, success bool) string {
+	if success {
+		return pick([]string{
+			fmt.Sprintf("%s's instincts pay off — they spot what others would have missed while they %s.", characterName, context),
+			fmt.Sprintf("A careful eye serves %s well; the attempt to %s succeeds.", characterName, context),
+		})
+	}
+	return pick([]string{
+		fmt.Sprintf("%s tries to %s, but finds nothing useful this time.", characterName, context),
+		fmt.Sprintf("Nothing comes of it — %s's attempt to %s turns up empty.", characterName, context),
+	})
+}
+
+// PartyFormed narrates two adventurers teaming up.
+func PartyFormed(leaderName, joinerName string) string {
+	return pick([]string{
+		fmt.Sprintf("%s and %s strike up a pact — partners for whatever comes next.", leaderName, joinerName),
+		fmt.Sprintf("%s clasps arms with %s. The party is formed.", leaderName, joinerName),
 	})
 }
 

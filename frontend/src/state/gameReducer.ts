@@ -5,9 +5,11 @@ import { appendChatMessage, type GameState, type View } from './gameState'
 
 export type GameAction =
   | { type: 'CONNECTION_STATUS'; status: ConnectionStatus }
+  | { type: 'NEEDS_ONBOARDING' }
   | { type: 'INBOUND'; message: InboundMessage }
   | { type: 'SET_VIEW'; view: View }
   | { type: 'SET_CHAT_CHANNEL'; channel: ChatChannel }
+  | { type: 'DISMISS_INVITE'; inviteId: string }
   | { type: 'CLOSE_PANEL' }
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
@@ -15,11 +17,17 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'CONNECTION_STATUS':
       return { ...state, connection: action.status }
 
+    case 'NEEDS_ONBOARDING':
+      return { ...state, needsOnboarding: true }
+
     case 'SET_VIEW':
       return { ...state, view: action.view }
 
     case 'SET_CHAT_CHANNEL':
       return { ...state, activeChatChannel: action.channel }
+
+    case 'DISMISS_INVITE':
+      return { ...state, pendingInvites: state.pendingInvites.filter((i) => i.inviteId !== action.inviteId) }
 
     case 'CLOSE_PANEL':
       return { ...state, view: 'overworld', choice: null, voteTallies: null, lastMessage: null }
@@ -39,6 +47,21 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
 
     case 'CHAT_MESSAGE':
       return { ...state, chatMessages: appendChatMessage(state.chatMessages, message.message) }
+
+    case 'LOCATION_STATE':
+      return { ...state, location: message.location, presentAtLocation: message.present }
+
+    case 'PARTY_INVITE_RECEIVED':
+      return {
+        ...state,
+        pendingInvites: [
+          ...state.pendingInvites,
+          { inviteId: message.inviteId, fromAccountId: message.fromAccountId, fromDisplayName: message.fromDisplayName },
+        ],
+      }
+
+    case 'PARTY_STATE':
+      return { ...state, party: message.members }
 
     case 'CHOICE_STATE':
       return {
@@ -83,10 +106,24 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
         lastRoomResolution: null,
       }
 
+    case 'ENCOUNTER_STATE':
+      return {
+        ...state,
+        view: 'dungeon',
+        activeEncounter: {
+          combatants: message.combatants,
+          currentCombatantId: message.currentCombatantId,
+          round: message.round,
+          log: message.log,
+          roomType: message.roomType,
+        },
+      }
+
     case 'ROOM_RESOLVED':
       return {
         ...state,
         activeDungeon: message.dungeon,
+        activeEncounter: null,
         lastRoomResolution: {
           roomType: message.roomType,
           victory: message.victory,
@@ -100,9 +137,13 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
         ...state,
         view: 'overworld',
         activeDungeon: null,
+        activeEncounter: null,
         lastRoomResolution: null,
         lastMessage: message.narration,
       }
+
+    case 'SKILL_CHECK_RESULT':
+      return { ...state, lastSkillCheck: { result: message.result, narration: message.narration } }
 
     case 'ERROR':
       return { ...state, lastMessage: message.message }

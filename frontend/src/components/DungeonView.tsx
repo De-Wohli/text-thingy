@@ -1,4 +1,5 @@
 import { useGame } from '../state/GameProvider'
+import { CombatView } from './CombatView'
 import type { AttackRoll, DungeonRoom } from '../engine/types'
 
 const ROOM_ORDER: DungeonRoom['type'][] = ['start', 'hallway', 'treasure', 'boss']
@@ -17,6 +18,11 @@ const ROOM_LABEL: Record<DungeonRoom['type'], string> = {
   boss: "Boss's Den",
 }
 
+const SKILL_CHECKS: { key: string; label: string; skill: 'investigation' | 'perception'; context: string }[] = [
+  { key: 'traps', label: 'Search for Traps', skill: 'investigation', context: 'search-for-traps' },
+  { key: 'listen', label: 'Listen for Danger', skill: 'perception', context: 'listen' },
+]
+
 function AttackLine({ roll }: { roll: AttackRoll }) {
   const verb = roll.hit ? (roll.critical ? 'CRIT' : 'hits') : 'misses'
   return (
@@ -34,6 +40,8 @@ export function DungeonView() {
   if (!dungeon) return null
 
   const resolution = state.lastRoomResolution
+  const currentRoom = dungeon.rooms.find((r) => !r.cleared)
+  const fighting = !!state.activeEncounter
 
   return (
     <div
@@ -55,6 +63,7 @@ export function DungeonView() {
             const encounter = dungeon.encounters.find((e) => e.roomType === type)
             if (!room) return null
             const isBoss = type === 'boss'
+            const isCurrent = currentRoom?.type === type
 
             return (
               <div key={type} className="flex items-center md:flex-col flex-1 gap-2">
@@ -84,13 +93,26 @@ export function DungeonView() {
 
                   {room.cleared ? (
                     <span className="text-good font-bold text-sm">✓ Cleared</span>
+                  ) : isCurrent && !fighting ? (
+                    <div className="flex flex-col gap-1 w-full mt-1">
+                      {SKILL_CHECKS.map((check) => (
+                        <button
+                          key={check.key}
+                          className="bg-[#4a3f2c] text-parchment rounded px-2 py-1 text-xs"
+                          onClick={() => actions.skillCheck(check.skill, check.context)}
+                        >
+                          {check.label}
+                        </button>
+                      ))}
+                      <button
+                        className="bg-accent text-ink rounded px-2 py-1 text-sm"
+                        onClick={() => actions.startEncounter(type)}
+                      >
+                        Start Encounter
+                      </button>
+                    </div>
                   ) : (
-                    <button
-                      className="bg-accent text-ink rounded px-2 py-1 text-sm mt-1"
-                      onClick={() => actions.clearDungeonRoom(type)}
-                    >
-                      Resolve Encounter
-                    </button>
+                    <span className="text-xs text-[#8a7e63]">Not yet reached</span>
                   )}
                 </div>
 
@@ -104,7 +126,22 @@ export function DungeonView() {
           })}
         </div>
 
-        {resolution && (
+        {state.lastSkillCheck && (
+          <div
+            className={`mt-3 rounded border p-2 text-sm ${state.lastSkillCheck.result.success ? 'border-good bg-[#1c2a1c]' : 'border-[#4a3f2c] bg-[#241f17]'}`}
+          >
+            <p className="m-0 italic">{state.lastSkillCheck.narration}</p>
+            <p className="m-0 text-xs text-[#8a7e63]">
+              d20={state.lastSkillCheck.result.d20} + {state.lastSkillCheck.result.abilityModifier} ability
+              {state.lastSkillCheck.result.proficient ? ` + ${state.lastSkillCheck.result.proficiencyBonus} proficiency` : ''} ={' '}
+              {state.lastSkillCheck.result.total} vs DC {state.lastSkillCheck.result.dc}
+            </p>
+          </div>
+        )}
+
+        {fighting && <CombatView />}
+
+        {resolution && !fighting && (
           <div
             className={`mt-4 rounded border p-3 ${resolution.victory ? 'border-good bg-[#1c2a1c]' : 'border-evil bg-[#2a1c1c]'}`}
           >

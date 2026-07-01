@@ -8,9 +8,6 @@ import (
 
 func TestGenerateProducesAllRoomTypes(t *testing.T) {
 	d := Generate("d1", "party-1", 1)
-	if d.Width != Size || d.Height != Size {
-		t.Fatalf("expected %dx%d grid, got %dx%d", Size, Size, d.Width, d.Height)
-	}
 	want := map[models.DungeonRoomType]bool{
 		models.RoomStart: true, models.RoomHallway: true, models.RoomTreasure: true, models.RoomBoss: true,
 	}

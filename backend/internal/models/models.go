@@ -1,6 +1,6 @@
 // Package models defines the core domain types shared across the gateway
 // and worker services. These mirror the TypeScript types under
-// frontend/src/types.ts — when one changes, update the other.
+// frontend/src/engine/types.ts — when one changes, update the other.
 package models
 
 import "time"
@@ -129,10 +129,10 @@ type Character struct {
 	CreatedAt     time.Time       `json:"createdAt"`
 }
 
-type Coordinate struct {
-	X int `json:"x"`
-	Y int `json:"y"`
-}
+// LocationID identifies a node in the world's location graph (see
+// internal/world). The world is a small hub-and-spoke graph, not a tile
+// grid — see outline.md's "Virtual tabletop" implementation note for why.
+type LocationID string
 
 type Account struct {
 	ID                string     `json:"id"`
@@ -140,8 +140,17 @@ type Account struct {
 	Honor             int        `json:"honor"`
 	Gold              int        `json:"gold"`
 	ActiveCharacterID *string    `json:"activeCharacterId"`
-	Coordinate        Coordinate `json:"coordinate"`
+	LocationID        LocationID `json:"locationId"`
 	PartyID           *string    `json:"partyId"`
+}
+
+// Party is a group of accounts who travel and adventure together — formed
+// via an invite/accept handshake (see backend/cmd/gateway/party.go), not
+// auto-assigned.
+type Party struct {
+	ID              string    `json:"id"`
+	LeaderAccountID string    `json:"leaderAccountId"`
+	CreatedAt       time.Time `json:"createdAt"`
 }
 
 type ChatChannel string
@@ -194,6 +203,68 @@ const (
 	ChoiceModeParty ChoiceMode = "party"
 )
 
+// Skill is one of the SRD skills relevant to the non-combat interactions
+// this prototype supports (search for traps, investigate, etc.) — a subset
+// of the full 5e skill list, not all eighteen.
+type Skill string
+
+const (
+	SkillPerception    Skill = "perception"
+	SkillInvestigation Skill = "investigation"
+	SkillInsight       Skill = "insight"
+	SkillStealth       Skill = "stealth"
+	SkillArcana        Skill = "arcana"
+	SkillAthletics     Skill = "athletics"
+)
+
+// SkillAbility maps each skill to the ability score that governs its check,
+// per the SRD.
+var SkillAbility = map[Skill]string{
+	SkillPerception:    "wis",
+	SkillInvestigation: "int",
+	SkillInsight:       "wis",
+	SkillStealth:       "dex",
+	SkillArcana:        "int",
+	SkillAthletics:     "str",
+}
+
+// ClassSkillProficiencies is a simplified fixed proficiency list per class
+// (real SRD chargen lets a player choose 2 from a class list; this
+// prototype's chargen has no such choice step yet, so each class gets a
+// fixed, thematically appropriate pair).
+var ClassSkillProficiencies = map[ClassID][]Skill{
+	ClassFighter: {SkillAthletics, SkillPerception},
+	ClassWizard:  {SkillArcana, SkillInvestigation},
+}
+
+func AbilityScoreFor(scores AbilityScores, ability string) int {
+	switch ability {
+	case "str":
+		return scores.Str
+	case "dex":
+		return scores.Dex
+	case "con":
+		return scores.Con
+	case "int":
+		return scores.Int
+	case "wis":
+		return scores.Wis
+	case "cha":
+		return scores.Cha
+	default:
+		return 10
+	}
+}
+
+func IsProficientInSkill(classID ClassID, skill Skill) bool {
+	for _, s := range ClassSkillProficiencies[classID] {
+		if s == skill {
+			return true
+		}
+	}
+	return false
+}
+
 type DungeonRoomType string
 
 const (
@@ -203,12 +274,10 @@ const (
 	RoomBoss     DungeonRoomType = "boss"
 )
 
+// DungeonRoom no longer carries grid coordinates (X/Y/Width/Height) — the
+// room-card UI doesn't render a literal grid, so they were vestigial.
 type DungeonRoom struct {
 	Type    DungeonRoomType `json:"type"`
-	X       int             `json:"x"`
-	Y       int             `json:"y"`
-	Width   int             `json:"width"`
-	Height  int             `json:"height"`
 	Cleared bool            `json:"cleared"`
 }
 
@@ -227,14 +296,11 @@ type DungeonEncounter struct {
 	Monsters []Monster       `json:"monsters"`
 }
 
-const DungeonSize = 15
-
+// Dungeon no longer carries a rendered grid (Width/Height/Grid) — dropped
+// along with DungeonRoom's coordinates, see above.
 type Dungeon struct {
 	ID         string             `json:"id"`
 	PartyID    string             `json:"partyId"`
-	Width      int                `json:"width"`
-	Height     int                `json:"height"`
-	Grid       [][]string         `json:"grid"`
 	Rooms      []DungeonRoom      `json:"rooms"`
 	Encounters []DungeonEncounter `json:"encounters"`
 	Resolved   bool               `json:"resolved"`

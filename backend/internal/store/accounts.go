@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"dnd5e-web/backend/internal/models"
+	"dnd5e-web/backend/internal/world"
 )
 
 func (s *Store) CreateAccount(ctx context.Context, displayName string) (models.Account, error) {
@@ -16,12 +17,12 @@ func (s *Store) CreateAccount(ctx context.Context, displayName string) (models.A
 		DisplayName: displayName,
 		Honor:       0,
 		Gold:        50,
-		Coordinate:  models.Coordinate{X: 10, Y: 7},
+		LocationID:  world.DefaultLocation,
 	}
 	_, err := s.Pool.Exec(ctx, `
-		INSERT INTO accounts (id, display_name, honor, gold, coord_x, coord_y)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, account.ID, account.DisplayName, account.Honor, account.Gold, account.Coordinate.X, account.Coordinate.Y)
+		INSERT INTO accounts (id, display_name, honor, gold, location_id)
+		VALUES ($1, $2, $3, $4, $5)
+	`, account.ID, account.DisplayName, account.Honor, account.Gold, account.LocationID)
 	if err != nil {
 		return models.Account{}, fmt.Errorf("create account: %w", err)
 	}
@@ -33,9 +34,9 @@ func (s *Store) GetAccount(ctx context.Context, id string) (models.Account, erro
 	var activeCharacterID *string
 	var partyID *string
 	err := s.Pool.QueryRow(ctx, `
-		SELECT id, display_name, honor, gold, active_character_id, coord_x, coord_y, party_id
+		SELECT id, display_name, honor, gold, active_character_id, location_id, party_id
 		FROM accounts WHERE id = $1
-	`, id).Scan(&a.ID, &a.DisplayName, &a.Honor, &a.Gold, &activeCharacterID, &a.Coordinate.X, &a.Coordinate.Y, &partyID)
+	`, id).Scan(&a.ID, &a.DisplayName, &a.Honor, &a.Gold, &activeCharacterID, &a.LocationID, &partyID)
 	if err != nil {
 		return models.Account{}, fmt.Errorf("get account: %w", err)
 	}
@@ -44,8 +45,32 @@ func (s *Store) GetAccount(ctx context.Context, id string) (models.Account, erro
 	return a, nil
 }
 
-func (s *Store) UpdateCoordinate(ctx context.Context, accountID string, coord models.Coordinate) error {
-	_, err := s.Pool.Exec(ctx, `UPDATE accounts SET coord_x = $2, coord_y = $3 WHERE id = $1`, accountID, coord.X, coord.Y)
+// FindAccountByDisplayName looks up an account for party invites. Display
+// names aren't unique-constrained (a prototype simplification — see
+// README), so this returns the most recently created match.
+func (s *Store) FindAccountByDisplayName(ctx context.Context, displayName string) (models.Account, error) {
+	var a models.Account
+	var activeCharacterID *string
+	var partyID *string
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id, display_name, honor, gold, active_character_id, location_id, party_id
+		FROM accounts WHERE display_name = $1 ORDER BY created_at DESC LIMIT 1
+	`, displayName).Scan(&a.ID, &a.DisplayName, &a.Honor, &a.Gold, &activeCharacterID, &a.LocationID, &partyID)
+	if err != nil {
+		return models.Account{}, fmt.Errorf("find account by display name: %w", err)
+	}
+	a.ActiveCharacterID = activeCharacterID
+	a.PartyID = partyID
+	return a, nil
+}
+
+func (s *Store) UpdateLocation(ctx context.Context, accountID string, locationID models.LocationID) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE accounts SET location_id = $2 WHERE id = $1`, accountID, locationID)
+	return err
+}
+
+func (s *Store) SetPartyID(ctx context.Context, accountID string, partyID *string) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE accounts SET party_id = $2 WHERE id = $1`, accountID, partyID)
 	return err
 }
 
@@ -152,10 +177,6 @@ func (s *Store) UpdateCharacterHP(ctx context.Context, characterID string, hpCur
 }
 
 func (s *Store) SaveDungeon(ctx context.Context, d models.Dungeon) error {
-	grid, err := json.Marshal(d.Grid)
-	if err != nil {
-		return err
-	}
 	rooms, err := json.Marshal(d.Rooms)
 	if err != nil {
 		return err
@@ -165,13 +186,25 @@ func (s *Store) SaveDungeon(ctx context.Context, d models.Dungeon) error {
 		return err
 	}
 	_, err = s.Pool.Exec(ctx, `
-		INSERT INTO dungeons (id, party_id, grid, rooms, encounters, resolved)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, d.ID, d.PartyID, grid, rooms, encounters, d.Resolved)
+		INSERT INTO dungeons (id, party_id, rooms, encounters, resolved)
+		VALUES ($1, $2, $3, $4, $5)
+	`, d.ID, d.PartyID, rooms, encounters, d.Resolved)
 	if err != nil {
 		return fmt.Errorf("save dungeon: %w", err)
 	}
 	return nil
+}
+
+// UpdateDungeonRooms persists room-cleared progress so a party member who
+// hot-drops into an in-progress dungeon (or a gateway restart) sees
+// accurate state rather than a freshly-generated, all-uncleared instance.
+func (s *Store) UpdateDungeonRooms(ctx context.Context, dungeonID string, rooms []models.DungeonRoom) error {
+	data, err := json.Marshal(rooms)
+	if err != nil {
+		return err
+	}
+	_, err = s.Pool.Exec(ctx, `UPDATE dungeons SET rooms = $2 WHERE id = $1`, dungeonID, data)
+	return err
 }
 
 func (s *Store) ResolveDungeon(ctx context.Context, id string) error {

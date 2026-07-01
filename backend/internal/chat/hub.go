@@ -84,3 +84,17 @@ func (h *Hub) BroadcastToParty(partyID string, payload any) {
 		}
 	}
 }
+
+// BroadcastToAccounts writes payload to exactly the given accounts — used
+// for groups that aren't necessarily a party, e.g. everyone standing at a
+// location (who may not have partied up yet) or everyone present in a
+// dungeon run.
+func (h *Hub) BroadcastToAccounts(accountIDs []string, payload any) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, id := range accountIDs {
+		if c, ok := h.clients[id]; ok {
+			_ = c.WriteJSON(payload)
+		}
+	}
+}

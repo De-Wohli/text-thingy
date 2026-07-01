@@ -1,7 +1,7 @@
 import { useGame } from '../state/GameProvider'
 import { CharacterSheet } from './CharacterSheet'
 import { HonorMeter } from './HonorMeter'
-import { MapLegend } from './MapLegend'
+import { PartyPanel } from './PartyPanel'
 
 export function Dashboard() {
   const { state } = useGame()
@@ -16,12 +16,11 @@ export function Dashboard() {
 
       <section className="border-t border-dashed border-[#4a3f2c] pt-3 text-sm">
         <p className="my-1">Gold: {state.account?.gold ?? 0}</p>
-        <p className="my-1">Party: {state.account?.partyId ?? 'solo'}</p>
       </section>
 
       {state.lastMessage && <p className="bg-[#2a2218] border-l-2 border-accent p-2 text-sm">{state.lastMessage}</p>}
 
-      <MapLegend />
+      <PartyPanel />
     </aside>
   )
 }

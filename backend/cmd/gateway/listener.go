@@ -68,8 +68,10 @@ func (s *server) listenDungeonReady(ctx context.Context) {
 			key = event.PartyID
 		}
 		s.dungeonsMu.Lock()
-		d := event.Dungeon
-		s.dungeons[key] = &d
+		s.dungeons[key] = &dungeonRun{
+			Dungeon:         event.Dungeon,
+			PresentAccounts: map[string]bool{event.AccountID: true},
+		}
 		s.dungeonsMu.Unlock()
 
 		characterName := "The adventurer"
@@ -78,12 +80,13 @@ func (s *server) listenDungeonReady(ctx context.Context) {
 		}
 		line := narrator.DungeonEntry(characterName)
 
-		ready := wsproto.NewDungeonReady(event.Dungeon, line)
-		if event.PartyID != "" {
-			s.hub.BroadcastToParty(event.PartyID, ready)
-		} else {
-			s.hub.SendTo(event.AccountID, ready)
-		}
+		// DUNGEON_READY (which opens the dungeon view) only goes to the
+		// account that actually triggered entry — other party members
+		// haven't traveled there or entered yet, and only get it via their
+		// own ENTER_DUNGEON hot-drop path (see handleEnterDungeon). The
+		// narration line is still shared with the whole party as a chat
+		// message, which doesn't open any UI on its own.
+		s.hub.SendTo(event.AccountID, wsproto.NewDungeonReady(event.Dungeon, line))
 		s.sendNarration(event.AccountID, event.PartyID, line)
 	}
 }

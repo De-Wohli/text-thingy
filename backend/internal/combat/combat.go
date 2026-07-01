@@ -1,16 +1,60 @@
-// Package combat resolves a dungeon room encounter using simplified-but-real
-// 5e mechanics: d20 attack rolls against Armor Class, SRD damage dice,
-// proficiency bonus, and ability modifiers. It deliberately does not model
-// every SRD subsystem (no spell slot expenditure, conditions, or initiative
-// order beyond "character swings, then every surviving monster swings back")
-// — see the package-level docs in README.md for the full list of
-// simplifications.
+// Package combat is a turn-based 5e encounter engine: real initiative
+// order, one action per combatant per turn, monster turns auto-resolved
+// (this is an automated-DM table, not a human controlling monsters), and a
+// running log the gateway narrates and broadcasts to the whole party.
+//
+// It deliberately does not model every SRD subsystem: one attack per turn
+// (no multiattack/bonus actions), no spell slot economy (a Wizard's "Attack"
+// reuses its damage cantrip every turn), and no saving throws. Losing a
+// fight has no permadeath — see backend/cmd/gateway/combat.go, which heals
+// a defeated party after a retreat rather than ending the game.
 package combat
 
-import "dnd5e-web/backend/internal/models"
+import (
+	"errors"
+	"fmt"
+	"math/rand"
+	"sort"
 
-// AttackRoll is one swing of a weapon or spell attack, recorded so the
-// gateway can narrate it and the client can render a combat log.
+	"dnd5e-web/backend/internal/models"
+)
+
+var (
+	ErrUnknownCombatant = errors.New("unknown combatant")
+	ErrNotYourTurn      = errors.New("it is not that combatant's turn")
+	ErrTargetDown       = errors.New("target is already down")
+)
+
+type CombatantKind string
+
+const (
+	KindPlayer  CombatantKind = "player"
+	KindMonster CombatantKind = "monster"
+)
+
+// Combatant is one participant in an Encounter — a party member's active
+// character or one monster from the room's encounter.
+type Combatant struct {
+	ID          string        `json:"id"`
+	Kind        CombatantKind `json:"kind"`
+	AccountID   string        `json:"accountId,omitempty"` // players only — authorizes whose turn it is
+	Name        string        `json:"name"`
+	Initiative  int           `json:"initiative"`
+	HP          int           `json:"hp"`
+	MaxHP       int           `json:"maxHp"`
+	AC          int           `json:"ac"`
+	AttackBonus int           `json:"attackBonus"`
+	DamageDie   string        `json:"-"`
+	DamageBonus int           `json:"-"`
+	Dodging     bool          `json:"dodging"`
+	Fled        bool          `json:"fled"`
+	Defeated    bool          `json:"defeated"`
+}
+
+func (c *Combatant) Alive() bool { return !c.Defeated && !c.Fled }
+
+// AttackRoll is one swing, recorded so the gateway can narrate it and the
+// client can render a combat log.
 type AttackRoll struct {
 	Attacker    string `json:"attacker"`
 	Target      string `json:"target"`
@@ -23,15 +67,12 @@ type AttackRoll struct {
 	Damage      int    `json:"damage"`
 }
 
-// Result is the outcome of a fully-resolved encounter (the room's monsters
-// fight to the death against a single round-robin, alternating with the
-// character, until one side is defeated).
-type Result struct {
-	Rounds            []AttackRoll `json:"rounds"`
-	Victory           bool         `json:"victory"`
-	CharacterHPBefore int          `json:"characterHpBefore"`
-	CharacterHPAfter  int          `json:"characterHpAfter"`
-	MonstersDefeated  []string     `json:"monstersDefeated"`
+// Encounter is a single room's fight in progress.
+type Encounter struct {
+	Combatants []*Combatant `json:"combatants"`
+	TurnIndex  int          `json:"turnIndex"`
+	Round      int          `json:"round"`
+	Log        []AttackRoll `json:"log"`
 }
 
 // classProfile is a simplified SRD-equipment assumption: Fighters swing a
@@ -55,8 +96,7 @@ func attackAbilityModifier(classID models.ClassID, scores models.AbilityScores) 
 	return models.AbilityModifier(scores.Str)
 }
 
-// WeaponName returns the flavor name of the character's class-appropriate
-// weapon/cantrip, for narration.
+// WeaponName returns the flavor name of a class's weapon/cantrip, for narration.
 func WeaponName(classID models.ClassID) string {
 	if p, ok := profiles[classID]; ok {
 		return p.weaponName
@@ -64,120 +104,252 @@ func WeaponName(classID models.ClassID) string {
 	return "weapon"
 }
 
-// Resolve fights a character against every monster in a room. Encounters
-// can be lost — if the character's HP would drop to 0 or below, the fight
-// ends in defeat — but there's no permadeath in this prototype: a losing
-// result still leaves the character stabilized (HP clamped to 1) rather
-// than dead, and the caller is expected to offer a retreat-and-heal path
-// rather than a game over screen.
-func Resolve(character models.Character, monsters []models.Monster) Result {
-	level := character.Level
+func characterCombatant(c models.Character) *Combatant {
+	level := c.Level
 	if level < 1 {
 		level = 1
 	}
 	prof := models.ProficiencyBonusForLevel(level)
-	abilityMod := attackAbilityModifier(character.ClassID, character.AbilityScores)
-	attackBonus := prof + abilityMod
-	cp := profiles[character.ClassID]
+	abilityMod := attackAbilityModifier(c.ClassID, c.AbilityScores)
+	cp := profiles[c.ClassID]
 	damageBonus := 0
 	if cp.addAbilityToDamage {
 		damageBonus = abilityMod
 	}
-
-	charAC := models.ArmorClassFor(character.ClassID, models.AbilityModifier(character.AbilityScores.Dex))
-	charHP := character.HPCurrent
-	if charHP <= 0 {
-		charHP = character.HPMax
+	hp := c.HPCurrent
+	if hp <= 0 {
+		hp = c.HPMax
 	}
+	return &Combatant{
+		ID:          c.ID,
+		Kind:        KindPlayer,
+		AccountID:   c.AccountID,
+		Name:        c.Name,
+		Initiative:  RollD20() + models.AbilityModifier(c.AbilityScores.Dex),
+		HP:          hp,
+		MaxHP:       c.HPMax,
+		AC:          models.ArmorClassFor(c.ClassID, models.AbilityModifier(c.AbilityScores.Dex)),
+		AttackBonus: prof + abilityMod,
+		DamageDie:   cp.damageDie,
+		DamageBonus: damageBonus,
+	}
+}
 
-	monsterHP := make([]int, len(monsters))
+func monsterCombatant(idx int, m models.Monster) *Combatant {
+	return &Combatant{
+		ID:          fmt.Sprintf("monster-%d", idx),
+		Kind:        KindMonster,
+		Name:        m.Name,
+		Initiative:  RollD20(), // monsters don't track a separate Dex score in this simplified model
+		HP:          m.HP,
+		MaxHP:       m.HP,
+		AC:          m.ArmorClass,
+		AttackBonus: m.AttackBonus,
+		DamageDie:   m.DamageDie,
+	}
+}
+
+// NewEncounter rolls initiative for every character and monster, sorts
+// descending, and resolves any monster turns that land before the first
+// player in the order (this is an automated DM — nothing waits on a human
+// to control a monster).
+func NewEncounter(characters []models.Character, monsters []models.Monster) *Encounter {
+	// Combatants/Log start as non-nil empty slices, not the zero-value nil
+	// — a nil slice serializes to JSON `null`, and the frontend calls
+	// .map()/.filter() on both without a null guard. This exact bug class
+	// has bitten this codebase twice before (ListCharacters, combat.Resolve's
+	// Rounds); third time's the rule, not the exception.
+	e := &Encounter{Round: 1, Combatants: []*Combatant{}, Log: []AttackRoll{}}
+	for _, c := range characters {
+		e.Combatants = append(e.Combatants, characterCombatant(c))
+	}
 	for i, m := range monsters {
-		monsterHP[i] = m.HP
+		e.Combatants = append(e.Combatants, monsterCombatant(i, m))
 	}
+	sort.SliceStable(e.Combatants, func(i, j int) bool {
+		return e.Combatants[i].Initiative > e.Combatants[j].Initiative
+	})
+	e.settleAutomaticTurns()
+	return e
+}
 
-	// Initialized (not nil) so json.Marshal produces `[]` instead of
-	// `null` for a vacuous (zero-monster) encounter — see
-	// dungeon.pickEncounterForLevel1's doc comment for why that matters.
-	rounds := []AttackRoll{}
-	defeated := make([]string, 0, len(monsters))
-	aliveCount := len(monsters)
-
-	for aliveCount > 0 && charHP > 0 {
-		targetIdx := -1
-		for i, hp := range monsterHP {
-			if hp > 0 {
-				targetIdx = i
-				break
-			}
-		}
-		if targetIdx == -1 {
-			break
-		}
-
-		d20 := RollD20()
-		total := d20 + attackBonus
-		crit := d20 == 20
-		hit := crit || total >= monsters[targetIdx].ArmorClass
-		damage := 0
-		if hit {
-			damage = RollDice(cp.damageDie) + damageBonus
-			if crit {
-				damage += RollDice(cp.damageDie)
-			}
-			if damage < 0 {
-				damage = 0
-			}
-			monsterHP[targetIdx] -= damage
-			if monsterHP[targetIdx] <= 0 {
-				aliveCount--
-				defeated = append(defeated, monsters[targetIdx].Name)
-			}
-		}
-		rounds = append(rounds, AttackRoll{
-			Attacker: character.Name, Target: monsters[targetIdx].Name,
-			D20: d20, AttackBonus: attackBonus, Total: total, TargetAC: monsters[targetIdx].ArmorClass,
-			Hit: hit, Critical: crit, Damage: damage,
-		})
-
-		if aliveCount == 0 {
-			break
-		}
-
-		for i, m := range monsters {
-			if monsterHP[i] <= 0 || charHP <= 0 {
-				continue
-			}
-			md20 := RollD20()
-			mtotal := md20 + m.AttackBonus
-			mcrit := md20 == 20
-			mhit := mcrit || mtotal >= charAC
-			mdamage := 0
-			if mhit {
-				mdamage = RollDice(m.DamageDie)
-				if mcrit {
-					mdamage += RollDice(m.DamageDie)
-				}
-				charHP -= mdamage
-			}
-			rounds = append(rounds, AttackRoll{
-				Attacker: m.Name, Target: character.Name,
-				D20: md20, AttackBonus: m.AttackBonus, Total: mtotal, TargetAC: charAC,
-				Hit: mhit, Critical: mcrit, Damage: mdamage,
-			})
+func (e *Encounter) find(id string) *Combatant {
+	for _, c := range e.Combatants {
+		if c.ID == id {
+			return c
 		}
 	}
+	return nil
+}
 
-	victory := aliveCount == 0 && charHP > 0
-	finalHP := charHP
-	if finalHP < 1 {
-		finalHP = 1
+// Current returns whoever's turn it is, or nil if the encounter has no
+// combatants left to act (should only happen once Outcome reports over).
+func (e *Encounter) Current() *Combatant {
+	if len(e.Combatants) == 0 || e.TurnIndex < 0 || e.TurnIndex >= len(e.Combatants) {
+		return nil
 	}
+	return e.Combatants[e.TurnIndex]
+}
 
-	return Result{
-		Rounds:            rounds,
-		Victory:           victory,
-		CharacterHPBefore: character.HPCurrent,
-		CharacterHPAfter:  finalHP,
-		MonstersDefeated:  defeated,
+func (e *Encounter) rollAttack(actor, target *Combatant) AttackRoll {
+	d20 := RollD20()
+	if target.Dodging {
+		// SRD Dodge: attacks against the dodger have disadvantage.
+		if second := RollD20(); second < d20 {
+			d20 = second
+		}
 	}
+	total := d20 + actor.AttackBonus
+	crit := d20 == 20
+	hit := crit || total >= target.AC
+	damage := 0
+	if hit {
+		damage = RollDice(actor.DamageDie) + actor.DamageBonus
+		if crit {
+			damage += RollDice(actor.DamageDie)
+		}
+		if damage < 0 {
+			damage = 0
+		}
+		target.HP -= damage
+		if target.HP <= 0 {
+			target.HP = 0
+			target.Defeated = true
+		}
+	}
+	return AttackRoll{
+		Attacker: actor.Name, Target: target.Name,
+		D20: d20, AttackBonus: actor.AttackBonus, Total: total, TargetAC: target.AC,
+		Hit: hit, Critical: crit, Damage: damage,
+	}
+}
+
+// Attack is a player action: actorID must be the current turn's combatant.
+func (e *Encounter) Attack(actorID, targetID string) (AttackRoll, error) {
+	actor := e.find(actorID)
+	if actor == nil {
+		return AttackRoll{}, ErrUnknownCombatant
+	}
+	if e.Current() != actor {
+		return AttackRoll{}, ErrNotYourTurn
+	}
+	target := e.find(targetID)
+	if target == nil || !target.Alive() {
+		return AttackRoll{}, ErrTargetDown
+	}
+	roll := e.rollAttack(actor, target)
+	e.Log = append(e.Log, roll)
+	return roll, nil
+}
+
+// Dodge is the SRD Dodge action: until the start of this combatant's next
+// turn, attacks against them have disadvantage.
+func (e *Encounter) Dodge(actorID string) error {
+	actor := e.find(actorID)
+	if actor == nil {
+		return ErrUnknownCombatant
+	}
+	if e.Current() != actor {
+		return ErrNotYourTurn
+	}
+	actor.Dodging = true
+	return nil
+}
+
+// Flee removes the combatant from the turn order for the rest of this
+// fight — it doesn't end the encounter for the rest of the party.
+func (e *Encounter) Flee(actorID string) error {
+	actor := e.find(actorID)
+	if actor == nil {
+		return ErrUnknownCombatant
+	}
+	if e.Current() != actor {
+		return ErrNotYourTurn
+	}
+	actor.Fled = true
+	return nil
+}
+
+func (e *Encounter) randomAlivePlayer() *Combatant {
+	var alive []*Combatant
+	for _, c := range e.Combatants {
+		if c.Kind == KindPlayer && c.Alive() {
+			alive = append(alive, c)
+		}
+	}
+	if len(alive) == 0 {
+		return nil
+	}
+	return alive[rand.Intn(len(alive))]
+}
+
+func (e *Encounter) stepIndex() {
+	if len(e.Combatants) == 0 {
+		return
+	}
+	e.TurnIndex++
+	if e.TurnIndex >= len(e.Combatants) {
+		e.TurnIndex = 0
+		e.Round++
+	}
+}
+
+// settleAutomaticTurns resolves monster turns starting at the current
+// index (without advancing first) until it's an alive player's turn or
+// the fight is over. Used both right after NewEncounter (a monster may
+// have rolled top initiative) and at the tail of AdvanceTurn.
+func (e *Encounter) settleAutomaticTurns() {
+	for i := 0; i < len(e.Combatants)+1; i++ {
+		if over, _ := e.Outcome(); over {
+			return
+		}
+		current := e.Current()
+		if current == nil {
+			return
+		}
+		if !current.Alive() {
+			e.stepIndex()
+			continue
+		}
+		if current.Kind == KindPlayer {
+			current.Dodging = false // "until the start of your next turn" — that's now
+			return
+		}
+		if target := e.randomAlivePlayer(); target != nil {
+			roll := e.rollAttack(current, target)
+			e.Log = append(e.Log, roll)
+		}
+		e.stepIndex()
+	}
+}
+
+// AdvanceTurn ends the current combatant's turn and settles the table up
+// to the next player decision point (auto-resolving any monster turns in
+// between).
+func (e *Encounter) AdvanceTurn() {
+	e.stepIndex()
+	e.settleAutomaticTurns()
+}
+
+// Outcome reports whether the fight is over, and if so, whether the party
+// won (every monster defeated/fled) or lost (every player defeated/fled).
+// A fight with no combatants on one side from the start (e.g. an empty
+// room) is a vacuous victory.
+func (e *Encounter) Outcome() (over, victory bool) {
+	anyPlayerAlive, anyMonsterAlive := false, false
+	for _, c := range e.Combatants {
+		if c.Kind == KindPlayer && c.Alive() {
+			anyPlayerAlive = true
+		}
+		if c.Kind == KindMonster && c.Alive() {
+			anyMonsterAlive = true
+		}
+	}
+	if !anyMonsterAlive {
+		return true, true
+	}
+	if !anyPlayerAlive {
+		return true, false
+	}
+	return false, false
 }
