@@ -1,10 +1,19 @@
+import { useState } from 'react'
 import { useGame } from '../state/GameProvider'
 
 export function PartyPanel() {
   const { state, actions } = useGame()
+  const [inviteName, setInviteName] = useState('')
+
+  function handleInvite(e: React.FormEvent) {
+    e.preventDefault()
+    if (!inviteName.trim()) return
+    actions.inviteToParty(inviteName.trim())
+    setInviteName('')
+  }
 
   return (
-    <section className="bg-panel border border-accent rounded p-4 flex flex-col gap-2">
+    <section className="border-t border-dashed border-[#4a3f2c] pt-3 flex flex-col gap-2">
       <h3 className="m-0 text-sm uppercase tracking-wide text-accent">Party</h3>
 
       {state.pendingInvites.map((invite) => (
@@ -12,7 +21,7 @@ export function PartyPanel() {
           key={invite.inviteId}
           className="bg-[#2a2218] border-l-2 border-accent p-2 text-sm flex justify-between items-center gap-2"
         >
-          <span>{invite.fromDisplayName} invites you to party up</span>
+          <span className="text-xs">{invite.fromDisplayName} invites you</span>
           <div className="flex gap-1 shrink-0">
             <button
               className="bg-good text-ink rounded px-2 py-1 text-xs"
@@ -37,7 +46,7 @@ export function PartyPanel() {
       ))}
 
       {state.party.length === 0 ? (
-        <p className="text-sm italic text-[#8a7e63] m-0">You're adventuring solo. Invite someone nearby to party up.</p>
+        <p className="text-xs italic text-[#8a7e63] m-0">Solo — invite a friend to party up.</p>
       ) : (
         <>
           <ul className="list-none p-0 m-0 space-y-1">
@@ -48,9 +57,7 @@ export function PartyPanel() {
                   {m.characterName && <span className="text-[#8a7e63]"> ({m.characterName})</span>}
                 </span>
                 {m.hpMax ? (
-                  <span className="text-xs">
-                    HP {m.hpCurrent}/{m.hpMax}
-                  </span>
+                  <span className="text-xs">HP {m.hpCurrent}/{m.hpMax}</span>
                 ) : null}
               </li>
             ))}
@@ -60,6 +67,18 @@ export function PartyPanel() {
           </button>
         </>
       )}
+
+      <form onSubmit={handleInvite} className="flex gap-1 mt-1">
+        <input
+          className="flex-1 bg-[#0c0a08] text-parchment border border-accent rounded px-2 py-1 text-xs"
+          placeholder="Invite by name..."
+          value={inviteName}
+          onChange={(e) => setInviteName(e.target.value)}
+        />
+        <button type="submit" className="bg-accent text-ink rounded px-2 py-1 text-xs">
+          Invite
+        </button>
+      </form>
     </section>
   )
 }

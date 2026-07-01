@@ -2,6 +2,7 @@ import { useGame } from '../state/GameProvider'
 import { CharacterSheet } from './CharacterSheet'
 import { HonorMeter } from './HonorMeter'
 import { PartyPanel } from './PartyPanel'
+import { ActionsPanel } from './ActionsPanel'
 
 export function Dashboard() {
   const { state } = useGame()
@@ -17,6 +18,8 @@ export function Dashboard() {
       <section className="border-t border-dashed border-[#4a3f2c] pt-3 text-sm">
         <p className="my-1">Gold: {state.account?.gold ?? 0}</p>
       </section>
+
+      <ActionsPanel />
 
       {state.lastMessage && <p className="bg-[#2a2218] border-l-2 border-accent p-2 text-sm">{state.lastMessage}</p>}
 

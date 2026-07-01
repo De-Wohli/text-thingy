@@ -149,6 +149,25 @@ export function WorldMap() {
       )}
 
       <p className="text-sm italic text-[#b3a78c] mt-3 mb-0">{location.description}</p>
+
+      {/* Who's here — spatial presence for party invites */}
+      {state.presentAtLocation.length > 0 && (
+        <div className="mt-3 border-t border-dashed border-[#4a3f2c] pt-2">
+          <p className="text-xs uppercase tracking-wide text-accent mb-1">Also here</p>
+          <div className="flex flex-wrap gap-1">
+            {state.presentAtLocation.map((p) => (
+              <span
+                key={p.accountId}
+                className="bg-[#2a2218] rounded px-2 py-0.5 text-xs cursor-pointer hover:bg-accent hover:text-ink"
+                title="Click to invite to party"
+                onClick={() => actions.inviteToParty(p.displayName)}
+              >
+                {p.displayName}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
