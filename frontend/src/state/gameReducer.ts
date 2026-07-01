@@ -116,21 +116,31 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
           round: message.round,
           log: message.log,
           roomType: message.roomType,
+          roomLabel: message.roomLabel,
         },
       }
 
-    case 'ROOM_RESOLVED':
+    case 'ROOM_RESOLVED': {
+      // Extract the label from the most recently cleared room of this type
+      // in the updated dungeon state (multiple rooms may share the same
+      // functional type, e.g. two hallway rooms, so we take the last cleared).
+      const clearedRooms = message.dungeon.rooms.filter(
+        (r) => r.type === message.roomType && r.cleared,
+      )
+      const resolvedRoom = clearedRooms[clearedRooms.length - 1]
       return {
         ...state,
         activeDungeon: message.dungeon,
         activeEncounter: null,
         lastRoomResolution: {
           roomType: message.roomType,
+          label: resolvedRoom?.label ?? message.roomType,
           victory: message.victory,
           combatLog: message.combatLog,
           narration: message.narration,
         },
       }
+    }
 
     case 'DUNGEON_RESOLVED':
       return {

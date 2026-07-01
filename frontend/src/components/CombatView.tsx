@@ -33,7 +33,9 @@ export function CombatView() {
 
   return (
     <div className="bg-[#0c0a08] border border-evil rounded p-3 mt-3">
-      <p className="m-0 mb-2 text-sm text-accent">Round {encounter.round}</p>
+      <p className="m-0 mb-2 text-sm text-accent">
+        {encounter.roomLabel ? `${encounter.roomLabel} — ` : ''}Round {encounter.round}
+      </p>
 
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>

@@ -36,6 +36,7 @@ export type VoteResolution = {
 
 export type RoomResolution = {
   roomType: DungeonRoomType
+  label: string
   victory: boolean
   combatLog: AttackRoll[]
   narration: string
@@ -47,6 +48,7 @@ export type EncounterState = {
   round: number
   log: AttackRoll[]
   roomType: DungeonRoomType
+  roomLabel?: string
 }
 
 export type PartyInvite = {

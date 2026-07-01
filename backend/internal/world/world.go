@@ -1,11 +1,9 @@
 // Package world is the server-authoritative location graph that replaced
 // the original tile-grid overworld. A virtual tabletop session run by an
-// automated Narrator doesn't need WASD movement between grid squares — a
-// real DM just says "you arrive at the tavern." The world is instead a
-// small hub-and-spoke graph of named locations; "moving" is choosing a
-// connected location to travel to. Keep this in sync with
-// frontend/src/data/locations.ts, which mirrors these IDs/names for the
-// visual map (see frontend/src/components/WorldMap.tsx).
+// automated Narrator doesn't need WASD movement between grid squares —
+// the world is instead a graph of named locations you travel between.
+// Keep this in sync with frontend/src/engine/locations.ts, which mirrors
+// IDs/names/icons for the visual map (WorldMap.tsx).
 package world
 
 import "dnd5e-web/backend/internal/models"
@@ -18,6 +16,9 @@ const (
 	KindTavern    Kind = "tavern"
 	KindNPC       Kind = "npc"
 	KindQuestHook Kind = "quest_hook"
+	KindOutdoor   Kind = "outdoor"
+	KindWater     Kind = "water"
+	KindBarrier   Kind = "barrier" // can be reached but blocks further travel
 )
 
 type Location struct {
@@ -28,53 +29,87 @@ type Location struct {
 	Connections []models.LocationID `json:"connections"`
 }
 
+// Location IDs
 const (
-	TownSquare   models.LocationID = "town_square"
-	GuildHall    models.LocationID = "guild_hall"
-	Tavern       models.LocationID = "tavern"
-	Market       models.LocationID = "market"
-	MineEntrance models.LocationID = "mine_entrance"
+	TheTown        models.LocationID = "the_town"
+	GuildHall      models.LocationID = "guild_hall"
+	Tavern         models.LocationID = "tavern"
+	Market         models.LocationID = "market"
+	NorthFields    models.LocationID = "north_fields"
+	WestFields     models.LocationID = "west_fields"
+	EastRiver      models.LocationID = "east_river"
+	SouthMountains models.LocationID = "south_mountains"
 )
 
-// Locations is a hub-and-spoke graph: every spoke connects back to the
-// Town Square hub, and the hub connects to every spoke. There is no
-// direct spoke-to-spoke travel, keeping the graph trivial to reason about
-// and to render as a map.
+// Locations is the world graph.
+//
+// Layout:
+//
+//	          North Fields
+//	              │
+//	West Fields ──┤The Town├── East River
+//	              │
+//	        South Mountains
+//	         (impassable)
+//
+// Interior town services (Guild Hall, Tavern, Market) are sub-locations
+// of The Town hub; the four cardinal directions lead outside.
 var Locations = map[models.LocationID]Location{
-	TownSquare: {
-		ID:          TownSquare,
-		Name:        "Town Square",
-		Description: "Cobblestones radiate out from a mossy fountain at the heart of town. Roads lead off toward the Guild Hall, the tavern, the market, and the old road out past the mine.",
+	TheTown: {
+		ID:          TheTown,
+		Name:        "The Town",
+		Description: "A modest town of stone and timber. The cobbled market square is flanked by the Guild Hall to one side and the Yawning Flask to the other. Four roads lead out: north across open fields, west toward ruined hills, east to the river, and south to mountains that have never been crossed.",
 		Kind:        KindHub,
-		Connections: []models.LocationID{GuildHall, Tavern, Market, MineEntrance},
+		Connections: []models.LocationID{GuildHall, Tavern, Market, NorthFields, WestFields, EastRiver, SouthMountains},
 	},
 	GuildHall: {
 		ID:          GuildHall,
 		Name:        "Adventurer's Guild Hall",
-		Description: "A broad stone hall hung with banners and bounty notices. This is where adventurers register, recruit, and swap who's leading the party.",
+		Description: "A broad stone hall hung with bounty notices and crossed swords. The Guild Clerk eyes you over the counter. This is where adventurers register, recruit, and trade roster slots.",
 		Kind:        KindGuildHall,
-		Connections: []models.LocationID{TownSquare},
+		Connections: []models.LocationID{TheTown},
 	},
 	Tavern: {
 		ID:          Tavern,
 		Name:        "The Yawning Flask",
-		Description: "Lantern light and the smell of stew. A few regulars nurse their drinks in the corner, half-listening for rumors worth repeating.",
+		Description: "Lantern light and the smell of meat stew. A half-dozen regulars nurse their drinks, half-listening for rumours worth repeating.",
 		Kind:        KindTavern,
-		Connections: []models.LocationID{TownSquare},
+		Connections: []models.LocationID{TheTown},
 	},
 	Market: {
 		ID:          Market,
 		Name:        "Market Square",
-		Description: "Stalls and awnings crowd the square. A citizen catches your eye, like they've been waiting for someone to ask the right question.",
+		Description: "Stalls and awnings crowd the square. A citizen catches your eye — the kind of look that says they've been waiting for someone reckless enough to ask the right question.",
 		Kind:        KindNPC,
-		Connections: []models.LocationID{TownSquare},
+		Connections: []models.LocationID{TheTown},
 	},
-	MineEntrance: {
-		ID:          MineEntrance,
-		Name:        "Old Mine Entrance",
-		Description: "A collapsed timber frame marks a shaft sunk into the hillside. Cold air drifts up from the dark — something below hasn't been disturbed in a long time.",
+	NorthFields: {
+		ID:          NorthFields,
+		Name:        "Northern Fields",
+		Description: "Flat farmland stretches north, broken by hedgerows and the occasional scarecrow. In the distance, a shepherd's hut sits on a gentle rise. Quiet out here — perhaps too quiet.",
+		Kind:        KindOutdoor,
+		Connections: []models.LocationID{TheTown},
+	},
+	WestFields: {
+		ID:          WestFields,
+		Name:        "Western Fields",
+		Description: "Rolling grassland gives way to a low hill crowned with crumbling stone. The ruins of an old keep squat at the summit — its gate long since collapsed, its lower levels still intact and unaccounted for.",
 		Kind:        KindQuestHook,
-		Connections: []models.LocationID{TownSquare},
+		Connections: []models.LocationID{TheTown},
+	},
+	EastRiver: {
+		ID:          EastRiver,
+		Name:        "Eastern River",
+		Description: "The Silven runs fast here, grey-green and cold. Willows lean over the near bank; across the water the far shore is thickly wooded. A broken ferry platform creaks at its mooring. No way across today — but the fishing is good.",
+		Kind:        KindWater,
+		Connections: []models.LocationID{TheTown},
+	},
+	SouthMountains: {
+		ID:          SouthMountains,
+		Name:        "Southern Mountains",
+		Description: "You walk south until the cobblestones run out and the road becomes a goat track, and then the goat track gives up entirely. A wall of sheer granite rises before you — the mountains have never let anyone through. The cold air tastes of snow. You turn back.",
+		Kind:        KindBarrier,
+		Connections: []models.LocationID{TheTown}, // only connection is back to town
 	},
 }
 
@@ -99,4 +134,4 @@ func IsValid(id models.LocationID) bool {
 }
 
 // DefaultLocation is where every new account starts.
-const DefaultLocation = TownSquare
+const DefaultLocation = TheTown

@@ -1,8 +1,6 @@
-// Package dungeon implements the Procedural Dungeon Generation Engine: a
-// fixed start/hallway/treasure/boss room sequence (rendered by the client
-// as a room-card track, not a literal grid — see frontend's DungeonView),
-// populated with SRD-derived monsters sized to the active character's
-// level via an XP budget (the "CR Budget Math" requirement).
+// Package dungeon generates dungeon instances: a sequence of themed rooms
+// rendered as a room-card track in the client (see DungeonView.tsx),
+// populated with SRD-derived monsters sized by an XP budget.
 package dungeon
 
 import (
@@ -11,13 +9,68 @@ import (
 	"dnd5e-web/backend/internal/models"
 )
 
+// roomSpec defines the fixed properties of one room in the keep dungeon.
+type roomSpec struct {
+	rType       models.DungeonRoomType
+	label       string
+	description string
+	icon        string
+}
+
+// keepRooms is the fixed room sequence for the ruined keep on the western
+// fields. The functional type (start/hallway/treasure/boss) drives the
+// monster XP budget; the label/description/icon drive the UI presentation.
+var keepRooms = []roomSpec{
+	{
+		rType:       models.RoomStart,
+		label:       "Broken Gateway",
+		description: "The keep's gate lies in rubble. Cold air drifts out of the dark beyond. Whatever happened here, it was a long time ago.",
+		icon:        "🚪",
+	},
+	{
+		rType:       models.RoomHallway,
+		label:       "Outer Court",
+		description: "A courtyard choked with weeds and debris. Something moves in the shadows near the far wall.",
+		icon:        "🌳",
+	},
+	{
+		rType:       models.RoomHallway,
+		label:       "Guard Barracks",
+		description: "Overturned bunks and rusted armour. Whoever occupied this place is long dead — or maybe not.",
+		icon:        "🛏",
+	},
+	{
+		rType:       models.RoomTreasure,
+		label:       "The Chapel",
+		description: "Cracked stone pews face a defaced altar. The air smells of old incense and something fouler underneath.",
+		icon:        "⛪",
+	},
+	{
+		rType:       models.RoomTreasure,
+		label:       "Undercroft",
+		description: "Low arches, piled crates, the glint of coin in the torchlight. Whatever was stored here is still guarded.",
+		icon:        "🪙",
+	},
+	{
+		rType:       models.RoomBoss,
+		label:       "The Warlord's Chamber",
+		description: "A high-ceilinged hall with a cracked throne at one end. Whatever rules this keep meets you here.",
+		icon:        "👑",
+	},
+}
+
 func buildRooms() []models.DungeonRoom {
-	return []models.DungeonRoom{
-		{Type: models.RoomStart, Cleared: true},
-		{Type: models.RoomHallway, Cleared: false},
-		{Type: models.RoomTreasure, Cleared: false},
-		{Type: models.RoomBoss, Cleared: false},
+	rooms := make([]models.DungeonRoom, 0, len(keepRooms))
+	for i, spec := range keepRooms {
+		rooms = append(rooms, models.DungeonRoom{
+			Type:        spec.rType,
+			Label:       spec.label,
+			Description: spec.description,
+			Icon:        spec.icon,
+			Cleared:     i == 0, // entrance pre-cleared
+		})
 	}
+	return rooms
 }
 
 // pickEncounterForLevel1 always returns at least one monster for
@@ -71,9 +124,8 @@ func pickBossEncounter() []models.Monster {
 	return []models.Monster{BossMonsters[rand.Intn(len(BossMonsters))]}
 }
 
-// Generate produces a fresh dungeon instance for the given party and active
-// character level. Phase 1 only ships a level-1 monster dataset; any other
-// level still resolves against it.
+// Generate produces a fresh dungeon instance for the given party and
+// character level (level-1 monster dataset used throughout Phase 1).
 func Generate(id, partyID string, characterLevel int) models.Dungeon {
 	rooms := buildRooms()
 

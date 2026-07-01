@@ -59,7 +59,8 @@ type CastVotePayload struct {
 }
 
 type StartEncounterPayload struct {
-	RoomType models.DungeonRoomType `json:"roomType"`
+	RoomType  models.DungeonRoomType `json:"roomType"`
+	RoomLabel string                 `json:"roomLabel,omitempty"` // for disambiguation when multiple rooms share the same type
 }
 
 type CombatActionPayload struct {
@@ -175,6 +176,7 @@ type EncounterState struct {
 	Round              int                    `json:"round"`
 	Log                []combat.AttackRoll    `json:"log"`
 	RoomType           models.DungeonRoomType `json:"roomType"`
+	RoomLabel          string                 `json:"roomLabel,omitempty"`
 }
 
 // RoomResolved is sent once a room's encounter ends — carries the final

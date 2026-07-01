@@ -276,9 +276,14 @@ const (
 
 // DungeonRoom no longer carries grid coordinates (X/Y/Width/Height) — the
 // room-card UI doesn't render a literal grid, so they were vestigial.
+// Label and Description carry the room's name and narrative flavor so
+// dungeons can have themed rooms rather than generic "corridor/boss" labels.
 type DungeonRoom struct {
-	Type    DungeonRoomType `json:"type"`
-	Cleared bool            `json:"cleared"`
+	Type        DungeonRoomType `json:"type"`
+	Label       string          `json:"label"`
+	Description string          `json:"description"`
+	Icon        string          `json:"icon"`
+	Cleared     bool            `json:"cleared"`
 }
 
 type Monster struct {

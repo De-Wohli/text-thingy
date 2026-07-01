@@ -65,6 +65,28 @@ func TestHallwayAndTreasureRoomsNeverEmpty(t *testing.T) {
 	}
 }
 
+func TestAllRoomsHaveLabelDescriptionAndIcon(t *testing.T) {
+	d := Generate("d6", "party-1", 1)
+	for _, room := range d.Rooms {
+		if room.Label == "" {
+			t.Errorf("room %s has an empty Label", room.Type)
+		}
+		if room.Description == "" {
+			t.Errorf("room %s has an empty Description", room.Type)
+		}
+		if room.Icon == "" {
+			t.Errorf("room %s has an empty Icon", room.Type)
+		}
+	}
+}
+
+func TestDungeonHasSixRooms(t *testing.T) {
+	d := Generate("d7", "party-1", 1)
+	if len(d.Rooms) != 6 {
+		t.Fatalf("expected 6 dungeon rooms, got %d", len(d.Rooms))
+	}
+}
+
 func TestClearRoomResolvesOnlyAfterBoss(t *testing.T) {
 	d := Generate("d4", "party-1", 1)
 	d = ClearRoom(d, models.RoomTreasure)

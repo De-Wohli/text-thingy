@@ -1,22 +1,6 @@
 import { useGame } from '../state/GameProvider'
 import { CombatView } from './CombatView'
-import type { AttackRoll, DungeonRoom } from '../engine/types'
-
-const ROOM_ORDER: DungeonRoom['type'][] = ['start', 'hallway', 'treasure', 'boss']
-
-const ROOM_ICON: Record<DungeonRoom['type'], string> = {
-  start: '\u{1F6AA}', // door
-  hallway: '\u{1F6B6}', // walking figure
-  treasure: '\u{1F4B0}', // money bag
-  boss: '\u{1F479}', // ogre
-}
-
-const ROOM_LABEL: Record<DungeonRoom['type'], string> = {
-  start: 'Entrance',
-  hallway: 'Corridor',
-  treasure: 'Treasure Vault',
-  boss: "Boss's Den",
-}
+import type { AttackRoll } from '../engine/types'
 
 const SKILL_CHECKS: { key: string; label: string; skill: 'investigation' | 'perception'; context: string }[] = [
   { key: 'traps', label: 'Search for Traps', skill: 'investigation', context: 'search-for-traps' },
@@ -49,26 +33,28 @@ export function DungeonView() {
       role="dialog"
       aria-label="Dungeon encounter track"
     >
-      <div className="bg-panel border border-accent rounded-md p-6 max-w-2xl w-full max-h-[85vh] overflow-y-auto">
+      <div className="bg-panel border border-accent rounded-md p-6 max-w-3xl w-full max-h-[85vh] overflow-y-auto">
         <header className="mb-4">
-          <h2 className="m-0">Dungeon Instance</h2>
+          <h2 className="m-0">Ruined Keep</h2>
           {state.dungeonEntryNarration && (
             <p className="text-sm italic text-accent mt-1">{state.dungeonEntryNarration}</p>
           )}
         </header>
 
-        <div className="flex flex-col md:flex-row items-stretch gap-2">
-          {ROOM_ORDER.map((type, i) => {
-            const room = dungeon.rooms.find((r) => r.type === type)
-            const encounter = dungeon.encounters.find((e) => e.roomType === type)
-            if (!room) return null
-            const isBoss = type === 'boss'
-            const isCurrent = currentRoom?.type === type
+        {/* Room progression track — iterate server-ordered rooms directly */}
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2">
+          {dungeon.rooms.map((room, i) => {
+            // Match by index — rooms and encounters are generated in the same
+            // order, and multiple rooms may share the same functional type
+            // (e.g. two hallway rooms), so find-by-type picks the wrong one.
+            const encounter = dungeon.encounters[i]
+            const isCurrent = currentRoom?.label === room.label
+            const isBoss = room.type === 'boss'
 
             return (
-              <div key={type} className="flex items-center md:flex-col flex-1 gap-2">
+              <div key={`${room.type}-${i}`} className="flex items-center gap-2">
                 <div
-                  className={`flex-1 w-full rounded border p-3 flex flex-col items-center text-center gap-1 ${
+                  className={`flex-1 min-w-[120px] rounded border p-3 flex flex-col items-center text-center gap-1 ${
                     room.cleared
                       ? 'border-good bg-[#1c2a1c]'
                       : isBoss
@@ -76,12 +62,12 @@ export function DungeonView() {
                         : 'border-accent bg-[#241f17]'
                   }`}
                 >
-                  <span className="text-3xl" aria-hidden>
-                    {ROOM_ICON[type]}
+                  <span className="text-2xl" aria-hidden>
+                    {room.icon || (isBoss ? '👑' : '🚪')}
                   </span>
-                  <strong>{ROOM_LABEL[type]}</strong>
+                  <strong className="text-sm">{room.label || room.type}</strong>
 
-                  {encounter && encounter.monsters.length > 0 && (
+                  {encounter && encounter.monsters.length > 0 && !room.cleared && (
                     <div className="flex flex-wrap justify-center gap-1 text-xs">
                       {encounter.monsters.map((m, idx) => (
                         <span key={idx} className="bg-[#0c0a08] rounded px-1.5 py-0.5">
@@ -106,18 +92,18 @@ export function DungeonView() {
                       ))}
                       <button
                         className="bg-accent text-ink rounded px-2 py-1 text-sm"
-                        onClick={() => actions.startEncounter(type)}
+                        onClick={() => actions.startEncounter(room.type, room.label)}
                       >
                         Start Encounter
                       </button>
                     </div>
-                  ) : (
+                  ) : !room.cleared ? (
                     <span className="text-xs text-[#8a7e63]">Not yet reached</span>
-                  )}
+                  ) : null}
                 </div>
 
-                {i < ROOM_ORDER.length - 1 && (
-                  <span className="text-accent text-xl md:rotate-0 rotate-90" aria-hidden>
+                {i < dungeon.rooms.length - 1 && (
+                  <span className="text-accent" aria-hidden>
                     →
                   </span>
                 )}
@@ -146,7 +132,7 @@ export function DungeonView() {
             className={`mt-4 rounded border p-3 ${resolution.victory ? 'border-good bg-[#1c2a1c]' : 'border-evil bg-[#2a1c1c]'}`}
           >
             <p className={`m-0 mb-2 font-bold ${resolution.victory ? 'text-good' : 'text-evil'}`}>
-              {resolution.victory ? 'Victory' : 'Defeat'} — {ROOM_LABEL[resolution.roomType]}
+              {resolution.victory ? 'Victory' : 'Defeat'} — {resolution.label || resolution.roomType}
             </p>
             <p className="italic text-sm mb-2">{resolution.narration}</p>
             <div className="bg-[#0c0a08] rounded p-2 text-xs space-y-1 max-h-40 overflow-y-auto font-mono">
@@ -164,7 +150,7 @@ export function DungeonView() {
           disabled={!dungeon.resolved}
           onClick={actions.resolveDungeon}
         >
-          Return to City Gates
+          Return to Town
         </button>
       </div>
     </div>

@@ -66,7 +66,7 @@ export type Account = {
   partyId: string | null
 }
 
-export type LocationKind = 'hub' | 'guild_hall' | 'tavern' | 'npc' | 'quest_hook'
+export type LocationKind = 'hub' | 'guild_hall' | 'tavern' | 'npc' | 'quest_hook' | 'outdoor' | 'water' | 'barrier'
 
 export type Location = {
   id: LocationId
@@ -104,6 +104,9 @@ export type DungeonRoomType = 'start' | 'hallway' | 'treasure' | 'boss'
 
 export type DungeonRoom = {
   type: DungeonRoomType
+  label: string
+  description: string
+  icon: string
   cleared: boolean
 }
 

@@ -17,11 +17,37 @@ import (
 	"dnd5e-web/backend/internal/wsproto"
 )
 
-var roomLabels = map[models.DungeonRoomType]string{
-	models.RoomStart:    "entrance",
-	models.RoomHallway:  "corridor",
-	models.RoomTreasure: "treasure vault",
-	models.RoomBoss:     "boss's den",
+// roomInfoFor retrieves the label and description for a specific room from
+// the dungeon run, falling back to generic names if the room isn't found.
+// Rooms now carry their own Label and Description (set by dungeon.Generate)
+// so narration can use each room's authored voice rather than a generic
+// lookup table.
+func roomInfoFor(dungeon models.Dungeon, roomType models.DungeonRoomType) (label, description string) {
+	for _, r := range dungeon.Rooms {
+		if r.Type == roomType {
+			if r.Label != "" {
+				label = r.Label
+			}
+			if r.Description != "" {
+				description = r.Description
+			}
+			return
+		}
+	}
+	// Fallback for runs generated before the label fields were added.
+	switch roomType {
+	case models.RoomStart:
+		label = "entrance"
+	case models.RoomHallway:
+		label = "corridor"
+	case models.RoomTreasure:
+		label = "treasure vault"
+	case models.RoomBoss:
+		label = "boss's den"
+	default:
+		label = string(roomType)
+	}
+	return
 }
 
 const combatTurnTimeout = 60 * time.Second
@@ -47,6 +73,7 @@ func encounterStateMessage(run *dungeonRun) wsproto.EncounterState {
 		Round:              e.Round,
 		Log:                e.Log,
 		RoomType:           run.ActiveRoomType,
+		RoomLabel:          run.ActiveRoomLabel,
 	}
 }
 
@@ -148,21 +175,34 @@ func (s *server) handleStartEncounter(ctx context.Context, client *chat.Client, 
 		s.dungeonsMu.Unlock()
 		return wsError("a fight is already underway")
 	}
+	// Match by label when provided (multiple rooms may share the same
+	// functional type, e.g. two hallway rooms); fall back to first-uncleared
+	// room of that type if no label is available.
 	var room *models.DungeonRoom
+	var encounterIdx int = -1
 	for i := range run.Dungeon.Rooms {
-		if run.Dungeon.Rooms[i].Type == p.RoomType {
-			room = &run.Dungeon.Rooms[i]
+		r := &run.Dungeon.Rooms[i]
+		if r.Type != p.RoomType {
+			continue
+		}
+		if p.RoomLabel != "" {
+			if r.Label == p.RoomLabel && !r.Cleared {
+				room = r
+				encounterIdx = i
+				break
+			}
+		} else if !r.Cleared {
+			room = r
+			encounterIdx = i
 		}
 	}
-	if room == nil || room.Cleared {
+	if room == nil {
 		s.dungeonsMu.Unlock()
 		return wsError("that room has nothing left to fight")
 	}
 	var monsters []models.Monster
-	for _, e := range run.Dungeon.Encounters {
-		if e.RoomType == p.RoomType {
-			monsters = e.Monsters
-		}
+	if encounterIdx >= 0 && encounterIdx < len(run.Dungeon.Encounters) {
+		monsters = run.Dungeon.Encounters[encounterIdx].Monsters
 	}
 	presentIDs := presentIDsOf(run)
 	s.dungeonsMu.Unlock()
@@ -172,6 +212,7 @@ func (s *server) handleStartEncounter(ctx context.Context, client *chat.Client, 
 	s.dungeonsMu.Lock()
 	run.ActiveEncounter = combat.NewEncounter(characters, monsters)
 	run.ActiveRoomType = p.RoomType
+	run.ActiveRoomLabel = p.RoomLabel
 	state := encounterStateMessage(run)
 	s.dungeonsMu.Unlock()
 
@@ -179,7 +220,8 @@ func (s *server) handleStartEncounter(ctx context.Context, client *chat.Client, 
 	for i, m := range monsters {
 		monsterNames[i] = m.Name
 	}
-	line := narrator.SceneDescription(roomLabels[p.RoomType], monsterNames)
+	_, roomDesc := roomInfoFor(run.Dungeon, p.RoomType)
+	line := narrator.RoomEntry(roomDesc, monsterNames)
 	s.sendNarrationToAccounts(presentIDs, line)
 	s.hub.BroadcastToAccounts(presentIDs, state)
 
@@ -268,6 +310,7 @@ func (s *server) applyCombatAction(ctx context.Context, key, actorAccountID, act
 	}
 
 	roomType := run.ActiveRoomType
+	roomLabel := run.ActiveRoomLabel
 	var combatLog []combat.AttackRoll
 	var defeatedMonsters []string
 	var dungeonCopy models.Dungeon
@@ -280,9 +323,27 @@ func (s *server) applyCombatAction(ctx context.Context, key, actorAccountID, act
 		}
 		run.ActiveEncounter = nil
 		if victory {
+			// Clear the SPECIFIC room that was being fought, not ALL rooms
+			// of that type — multiple rooms can share a functional type.
+			cleared := false
 			for i := range run.Dungeon.Rooms {
-				if run.Dungeon.Rooms[i].Type == roomType {
-					run.Dungeon.Rooms[i].Cleared = true
+				r := &run.Dungeon.Rooms[i]
+				if r.Type != roomType || r.Cleared {
+					continue
+				}
+				if roomLabel == "" || r.Label == roomLabel {
+					r.Cleared = true
+					cleared = true
+					break
+				}
+			}
+			if !cleared {
+				// Fallback: clear the first uncleared room of that type.
+				for i := range run.Dungeon.Rooms {
+					if run.Dungeon.Rooms[i].Type == roomType && !run.Dungeon.Rooms[i].Cleared {
+						run.Dungeon.Rooms[i].Cleared = true
+						break
+					}
 				}
 			}
 			for i := range run.Dungeon.Rooms {
@@ -311,7 +372,11 @@ func (s *server) applyCombatAction(ctx context.Context, key, actorAccountID, act
 		return nil
 	}
 
-	roomLabel := roomLabels[roomType]
+	// roomLabel is already set from run.ActiveRoomLabel above; fall back
+	// to roomInfoFor if it was empty (pre-label runs or label not sent).
+	if roomLabel == "" {
+		roomLabel, _ = roomInfoFor(dungeonCopy, roomType)
+	}
 	var resultLine string
 	if victory {
 		resultLine = narrator.RoomVictory("The party", roomLabel, defeatedMonsters)

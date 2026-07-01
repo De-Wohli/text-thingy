@@ -58,7 +58,7 @@ func DungeonEntry(characterName string) string {
 }
 
 // SceneDescription narrates arriving in a dungeon room, describing any
-// monsters present.
+// monsters present. Prefer RoomEntry when a full room description is available.
 func SceneDescription(roomLabel string, monsterNames []string) string {
 	if len(monsterNames) == 0 {
 		return pick([]string{
@@ -71,6 +71,22 @@ func SceneDescription(roomLabel string, monsterNames []string) string {
 		fmt.Sprintf("The %s opens up ahead. %s block the way, weapons ready.", roomLabel, foes),
 		fmt.Sprintf("You round the corner into the %s — %s are already watching you.", roomLabel, foes),
 	})
+}
+
+// RoomEntry uses the room's own authored description as the primary narration,
+// then appends a brief monster-presence line when enemies are present. This
+// is richer than SceneDescription because themed rooms carry their own voice.
+func RoomEntry(roomDescription string, monsterNames []string) string {
+	if len(monsterNames) == 0 {
+		return roomDescription
+	}
+	foes := strings.Join(monsterNames, ", ")
+	suffix := pick([]string{
+		fmt.Sprintf(" — and %s stand between you and the next door.", foes),
+		fmt.Sprintf(" %s are waiting.", foes),
+		fmt.Sprintf(" You spot %s. The fight is unavoidable.", foes),
+	})
+	return roomDescription + suffix
 }
 
 // AttackSwing narrates a single attack roll. damage is only meaningful

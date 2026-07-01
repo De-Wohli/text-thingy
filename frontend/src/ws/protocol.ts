@@ -33,7 +33,7 @@ export type OutboundEnvelope =
   | { type: 'MAKE_CHOICE'; payload: { promptId: string; optionId: string } }
   | { type: 'CAST_VOTE'; payload: { promptId: string; optionId: string } }
   | { type: 'ENTER_DUNGEON'; payload: Record<string, never> }
-  | { type: 'START_ENCOUNTER'; payload: { roomType: DungeonRoomType } }
+  | { type: 'START_ENCOUNTER'; payload: { roomType: DungeonRoomType; roomLabel?: string } }
   | { type: 'COMBAT_ACTION'; payload: { action: CombatActionType; targetId?: string } }
   | { type: 'SKILL_CHECK'; payload: { skill: Skill; context: string } }
   | { type: 'RESOLVE_DUNGEON'; payload: Record<string, never> }
@@ -124,6 +124,7 @@ export type EncounterStateMessage = {
   round: number
   log: AttackRoll[]
   roomType: DungeonRoomType
+  roomLabel?: string
 }
 
 // Sent once a room's encounter ends — carries the final combat log so the

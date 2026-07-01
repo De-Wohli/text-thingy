@@ -21,7 +21,7 @@ type GameActions = {
   makeChoice: (promptId: string, optionId: string) => void
   castVote: (promptId: string, optionId: string) => void
   enterDungeon: () => void
-  startEncounter: (roomType: DungeonRoomType) => void
+  startEncounter: (roomType: DungeonRoomType, roomLabel?: string) => void
   combatAction: (action: CombatActionType, targetId?: string) => void
   skillCheck: (skill: Skill, context: string) => void
   resolveDungeon: () => void
@@ -99,7 +99,7 @@ export function GameProvider({ children }: { children: ReactNode }) {
       makeChoice: (promptId, optionId) => send({ type: 'MAKE_CHOICE', payload: { promptId, optionId } }),
       castVote: (promptId, optionId) => send({ type: 'CAST_VOTE', payload: { promptId, optionId } }),
       enterDungeon: () => send({ type: 'ENTER_DUNGEON', payload: {} }),
-      startEncounter: (roomType) => send({ type: 'START_ENCOUNTER', payload: { roomType } }),
+      startEncounter: (roomType, roomLabel) => send({ type: 'START_ENCOUNTER', payload: { roomType, roomLabel } }),
       combatAction: (action, targetId) => send({ type: 'COMBAT_ACTION', payload: { action, targetId } }),
       skillCheck: (skill, context) => send({ type: 'SKILL_CHECK', payload: { skill, context } }),
       resolveDungeon: () => send({ type: 'RESOLVE_DUNGEON', payload: {} }),

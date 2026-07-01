@@ -29,6 +29,7 @@ type dungeonRun struct {
 	PresentAccounts map[string]bool
 	ActiveEncounter *combat.Encounter
 	ActiveRoomType  models.DungeonRoomType
+	ActiveRoomLabel string // label disambiguates rooms sharing the same functional type
 }
 
 type partyInvite struct {
