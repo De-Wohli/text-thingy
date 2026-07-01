@@ -32,7 +32,7 @@ func TestNewEncounterFieldsAreNeverNilSlices(t *testing.T) {
 	// frontend calls .map()/.filter() on Combatants/Log without a null
 	// guard — this exact bug class has bitten ListCharacters and
 	// combat.Resolve's Rounds field earlier in this codebase's history.
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	if e.Combatants == nil {
 		t.Fatal("expected Combatants to be a non-nil slice")
 	}
@@ -42,7 +42,7 @@ func TestNewEncounterFieldsAreNeverNilSlices(t *testing.T) {
 }
 
 func TestNewEncounterOrdersByInitiativeDescending(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	for i := 1; i < len(e.Combatants); i++ {
 		if e.Combatants[i-1].Initiative < e.Combatants[i].Initiative {
 			t.Fatalf("combatants not sorted by initiative descending: %+v", e.Combatants)
@@ -51,7 +51,7 @@ func TestNewEncounterOrdersByInitiativeDescending(t *testing.T) {
 }
 
 func TestAttackOnlyAllowedOnYourTurn(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	current := e.Current()
 	if current == nil {
 		t.Fatal("expected a current combatant")
@@ -72,7 +72,7 @@ func TestAttackOnlyAllowedOnYourTurn(t *testing.T) {
 }
 
 func TestAttackDefeatsWeakMonster(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	current := e.Current()
 	if current == nil || current.Kind != KindPlayer {
 		t.Fatalf("expected the fighter to act first against a trivial monster, got %+v", current)
@@ -99,7 +99,7 @@ func findMonster(e *Encounter) *Combatant {
 }
 
 func TestDodgeGivesDisadvantageToAttacker(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	player := e.find("c1")
 	if e.Current() != player {
 		t.Skip("monster acted first this run, skipping deterministic dodge check")
@@ -118,7 +118,7 @@ func TestFleeRemovesCombatantFromTurnOrderWithoutEndingFight(t *testing.T) {
 	// leading-turn resolution, before either player gets to act — that
 	// would make "two players, one flees" collapse to "one player left"
 	// for reasons unrelated to what this test is checking.
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak"), sampleFighter("c2", "Mira")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak"), sampleFighter("c2", "Mira")}, []models.Monster{weakMonster()}, nil)
 	current := e.Current()
 	if current == nil || current.Kind != KindPlayer {
 		t.Fatal("expected a player to act first against trivially-easy-to-go-first setup")
@@ -139,7 +139,7 @@ func TestFleeRemovesCombatantFromTurnOrderWithoutEndingFight(t *testing.T) {
 }
 
 func TestOutcomeDefeatWhenAllPlayersDown(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{unbeatableMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{unbeatableMonster()}, nil)
 	for i := 0; i < 50; i++ {
 		if over, _ := e.Outcome(); over {
 			break
@@ -169,6 +169,7 @@ func TestAdvanceTurnAutoResolvesMonsterTurns(t *testing.T) {
 	e := NewEncounter(
 		[]models.Character{sampleFighter("c1", "Brak"), sampleFighter("c2", "Mira")},
 		[]models.Monster{weakMonster()},
+		nil,
 	)
 	for i := 0; i < 10; i++ {
 		if over, _ := e.Outcome(); over {
@@ -189,7 +190,7 @@ func TestAdvanceTurnAutoResolvesMonsterTurns(t *testing.T) {
 }
 
 func TestUnknownCombatantErrors(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{weakMonster()}, nil)
 	if _, err := e.Attack("nobody", "also-nobody"); err != ErrUnknownCombatant {
 		t.Fatalf("expected ErrUnknownCombatant, got %v", err)
 	}
@@ -202,7 +203,7 @@ func TestUnknownCombatantErrors(t *testing.T) {
 }
 
 func TestEmptyMonsterListIsVacuousVictory(t *testing.T) {
-	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{})
+	e := NewEncounter([]models.Character{sampleFighter("c1", "Brak")}, []models.Monster{}, nil)
 	over, victory := e.Outcome()
 	if !over || !victory {
 		t.Fatalf("expected a vacuous victory with no monsters, got over=%v victory=%v", over, victory)

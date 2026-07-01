@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"dnd5e-web/backend/internal/narrator"
 	"dnd5e-web/backend/internal/redisstate"
@@ -71,6 +72,8 @@ func (s *server) listenDungeonReady(ctx context.Context) {
 		s.dungeons[key] = &dungeonRun{
 			Dungeon:         event.Dungeon,
 			PresentAccounts: map[string]bool{event.AccountID: true},
+			SkillCooldowns:  make(map[string]time.Time),
+			RoomModifiers:   make(map[string]*roomCombatModifier),
 		}
 		s.dungeonsMu.Unlock()
 

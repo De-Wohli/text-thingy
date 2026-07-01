@@ -164,6 +164,17 @@ export type Combatant = {
 
 export type CombatActionType = 'attack' | 'dodge' | 'flee'
 
+export type SkillOutcome =
+  | 'monster_removed'
+  | 'player_first'
+  | 'sneak_attack'
+  | 'attack_bonus'
+  | 'damage_bonus'
+  | 'temp_hp'
+  | 'trap_damage'
+  | 'monster_ready'
+  | 'none'
+
 export type SkillCheckResultData = {
   skill: Skill
   d20: number
@@ -173,4 +184,7 @@ export type SkillCheckResultData = {
   dc: number
   proficient: boolean
   success: boolean
+  outcome: SkillOutcome
+  outcomeValue: number
+  cooldownSeconds: number
 }

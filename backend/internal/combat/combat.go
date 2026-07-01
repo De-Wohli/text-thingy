@@ -73,6 +73,11 @@ type Encounter struct {
 	TurnIndex  int          `json:"turnIndex"`
 	Round      int          `json:"round"`
 	Log        []AttackRoll `json:"log"`
+
+	// FirstRoundMonsterAttackBonus is applied to every monster attack in
+	// round 1 only — set when the party's Perception or Stealth check failed
+	// (they alerted the monsters who now act with more precision).
+	FirstRoundMonsterAttackBonus int `json:"firstRoundMonsterAttackBonus,omitempty"`
 }
 
 // classProfile is a simplified SRD-equipment assumption: Fighters swing a
@@ -149,19 +154,46 @@ func monsterCombatant(idx int, m models.Monster) *Combatant {
 	}
 }
 
+// EncounterOptions carries mechanical bonuses derived from pre-combat skill
+// checks (see backend/internal/skillcheck) that modify how the fight starts.
+// A nil pointer is safe and means "no modifications."
+type EncounterOptions struct {
+	// PlayerInitiativeBonus is added to every player's rolled initiative —
+	// used for Perception success so the party always acts before monsters.
+	PlayerInitiativeBonus int
+	// PlayerDamageBonus is added to every damage roll the players make
+	// throughout the fight — used for Arcana success.
+	PlayerDamageBonus int
+	// PlayerAttackBonus is added to every player attack roll — used for
+	// Insight success.
+	PlayerAttackBonus int
+	// MonsterAlertBonus is added to every monster attack in round 1 only —
+	// used for Perception/Stealth failure (the monsters heard the party first).
+	MonsterAlertBonus int
+}
+
 // NewEncounter rolls initiative for every character and monster, sorts
 // descending, and resolves any monster turns that land before the first
 // player in the order (this is an automated DM — nothing waits on a human
 // to control a monster).
-func NewEncounter(characters []models.Character, monsters []models.Monster) *Encounter {
+func NewEncounter(characters []models.Character, monsters []models.Monster, opts *EncounterOptions) *Encounter {
 	// Combatants/Log start as non-nil empty slices, not the zero-value nil
 	// — a nil slice serializes to JSON `null`, and the frontend calls
 	// .map()/.filter() on both without a null guard. This exact bug class
 	// has bitten this codebase twice before (ListCharacters, combat.Resolve's
 	// Rounds); third time's the rule, not the exception.
 	e := &Encounter{Round: 1, Combatants: []*Combatant{}, Log: []AttackRoll{}}
+	if opts != nil && opts.MonsterAlertBonus > 0 {
+		e.FirstRoundMonsterAttackBonus = opts.MonsterAlertBonus
+	}
 	for _, c := range characters {
-		e.Combatants = append(e.Combatants, characterCombatant(c))
+		cb := characterCombatant(c)
+		if opts != nil {
+			cb.Initiative += opts.PlayerInitiativeBonus
+			cb.DamageBonus += opts.PlayerDamageBonus
+			cb.AttackBonus += opts.PlayerAttackBonus
+		}
+		e.Combatants = append(e.Combatants, cb)
 	}
 	for i, m := range monsters {
 		e.Combatants = append(e.Combatants, monsterCombatant(i, m))
@@ -199,7 +231,11 @@ func (e *Encounter) rollAttack(actor, target *Combatant) AttackRoll {
 			d20 = second
 		}
 	}
-	total := d20 + actor.AttackBonus
+	attackBonus := actor.AttackBonus
+	if actor.Kind == KindMonster && e.Round == 1 && e.FirstRoundMonsterAttackBonus > 0 {
+		attackBonus += e.FirstRoundMonsterAttackBonus
+	}
+	total := d20 + attackBonus
 	crit := d20 == 20
 	hit := crit || total >= target.AC
 	damage := 0
@@ -219,7 +255,7 @@ func (e *Encounter) rollAttack(actor, target *Combatant) AttackRoll {
 	}
 	return AttackRoll{
 		Attacker: actor.Name, Target: target.Name,
-		D20: d20, AttackBonus: actor.AttackBonus, Total: total, TargetAC: target.AC,
+		D20: d20, AttackBonus: attackBonus, Total: total, TargetAC: target.AC,
 		Hit: hit, Critical: crit, Damage: damage,
 	}
 }

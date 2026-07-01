@@ -17,6 +17,17 @@ import (
 	"dnd5e-web/backend/internal/wsproto"
 )
 
+// roomCombatModifier carries deferred bonuses from pre-combat skill checks
+// that are applied when the room's encounter is built.
+type roomCombatModifier struct {
+	PlayerInitiativeBonus int  // Perception success: party always goes first
+	PlayerAttackBonus     int  // Insight success: +N to all party attack rolls
+	PlayerDamageBonus     int  // Arcana success: +N to all party damage rolls
+	PlayerTempHP          int  // Athletics success: +N HP before the fight
+	SneakAttack           bool // Stealth success: first player gets a free attack
+	MonsterAlertBonus     int  // Perception/Stealth failure: monsters get +N to first attack
+}
+
 // dungeonRun is the gateway's in-memory view of one party's active dungeon
 // instance: which accounts have actually traveled in (the hot-drop
 // roster — see handleEnterDungeon) and the currently-active turn-based
@@ -30,6 +41,15 @@ type dungeonRun struct {
 	ActiveEncounter *combat.Encounter
 	ActiveRoomType  models.DungeonRoomType
 	ActiveRoomLabel string // label disambiguates rooms sharing the same functional type
+
+	// SkillCooldowns tracks when a failed skill check's retry window expires.
+	// key = accountID + ":" + string(skill) + ":" + roomLabel
+	SkillCooldowns map[string]time.Time
+
+	// RoomModifiers holds deferred skill-check bonuses, consumed by
+	// handleStartEncounter when the encounter is built.
+	// key = roomLabel
+	RoomModifiers map[string]*roomCombatModifier
 }
 
 type partyInvite struct {

@@ -152,8 +152,18 @@ function applyInbound(state: GameState, message: InboundMessage): GameState {
         lastMessage: message.narration,
       }
 
-    case 'SKILL_CHECK_RESULT':
-      return { ...state, lastSkillCheck: { result: message.result, narration: message.narration } }
+    case 'SKILL_CHECK_RESULT': {
+      const updatedCooldowns = { ...state.skillCooldowns }
+      if (message.result.cooldownSeconds > 0) {
+        // Key on the skill name so all contexts for that skill are locked
+        // together — consistent with the backend's per-skill-per-room logic.
+        updatedCooldowns[String(message.result.skill)] = Date.now() + message.result.cooldownSeconds * 1000
+      } else {
+        // Success clears any existing cooldown for this skill.
+        delete updatedCooldowns[String(message.result.skill)]
+      }
+      return { ...state, lastSkillCheck: { result: message.result, narration: message.narration }, skillCooldowns: updatedCooldowns }
+    }
 
     case 'ERROR':
       return { ...state, lastMessage: message.message }

@@ -1,14 +1,38 @@
-// Package skillcheck implements 5e-style ability checks for the non-combat
-// interactions a tabletop session expects outside of a fight — searching
-// for traps, investigating a room, reading a situation — as a d20 +
-// ability modifier (+ proficiency bonus, if the class is proficient in
-// that skill) roll against a DC.
+// Package skillcheck implements 5e-style ability checks and the mechanical
+// outcomes they produce. Each successful or failed check carries a typed
+// Outcome that the gateway applies — either immediately (trap damage, temp
+// HP) or when the room's encounter is built (initiative/attack/damage mods).
 package skillcheck
 
 import (
 	"dnd5e-web/backend/internal/combat"
 	"dnd5e-web/backend/internal/models"
 )
+
+// Outcome is the mechanical consequence of a skill check result.
+type Outcome string
+
+const (
+	// Success outcomes
+	OutcomeMonsterRemoved Outcome = "monster_removed" // Investigation: strip weakest foe
+	OutcomePlayerFirst    Outcome = "player_first"    // Perception: players always go first
+	OutcomeSneakAttack    Outcome = "sneak_attack"    // Stealth: free attack before initiative
+	OutcomeAttackBonus    Outcome = "attack_bonus"    // Insight: +2 attack in the fight
+	OutcomeDamageBonus    Outcome = "damage_bonus"    // Arcana: +1 damage throughout the fight
+	OutcomeTempHP         Outcome = "temp_hp"         // Athletics: +3 HP before the fight
+
+	// Failure outcomes
+	OutcomeTrapDamage   Outcome = "trap_damage"   // Investigation: 1d4 trap springs
+	OutcomeMonsterReady Outcome = "monster_ready" // Perception/Stealth: monsters alert (+2 atk)
+
+	// No extra effect
+	OutcomeNone Outcome = "none"
+)
+
+// CooldownSeconds is how long a failed check locks out the same skill+room
+// combination. In a live session this prevents retry-spam while feeling
+// proportionate (one minute ~ "you used up your attempt this scene").
+const CooldownSeconds = 60
 
 type Result struct {
 	Skill            models.Skill `json:"skill"`
@@ -19,6 +43,40 @@ type Result struct {
 	DC               int          `json:"dc"`
 	Proficient       bool         `json:"proficient"`
 	Success          bool         `json:"success"`
+	Outcome          Outcome      `json:"outcome"`
+	OutcomeValue     int          `json:"outcomeValue"`    // magnitude: damage dealt, bonus, HP granted
+	CooldownSeconds  int          `json:"cooldownSeconds"` // 0 on success, CooldownSeconds on failure
+}
+
+// outcomeFor maps each skill×success combination to its mechanical consequence
+// and the numeric magnitude (0 if the effect is qualitative / applied in engine).
+func outcomeFor(skill models.Skill, success bool) (Outcome, int) {
+	if success {
+		switch skill {
+		case models.SkillInvestigation:
+			return OutcomeMonsterRemoved, 0
+		case models.SkillPerception:
+			return OutcomePlayerFirst, 20 // +20 to all player initiatives
+		case models.SkillStealth:
+			return OutcomeSneakAttack, 0
+		case models.SkillInsight:
+			return OutcomeAttackBonus, 2 // +2 to every player attack roll
+		case models.SkillArcana:
+			return OutcomeDamageBonus, 1 // +1 to every player damage roll
+		case models.SkillAthletics:
+			return OutcomeTempHP, 3 // +3 HP added before the fight
+		}
+	} else {
+		switch skill {
+		case models.SkillInvestigation:
+			// Trap springs — deal 1d4 damage to the active character.
+			return OutcomeTrapDamage, combat.RollDice("1d4")
+		case models.SkillPerception, models.SkillStealth:
+			// Monsters heard/spotted you first — they get +2 on attacks.
+			return OutcomeMonsterReady, 2
+		}
+	}
+	return OutcomeNone, 0
 }
 
 func Roll(character models.Character, skill models.Skill, dc int) Result {
@@ -34,6 +92,14 @@ func Roll(character models.Character, skill models.Skill, dc int) Result {
 		profBonus = models.ProficiencyBonusForLevel(level)
 	}
 	total := d20 + abilityMod + profBonus
+	success := total >= dc
+
+	outcome, outcomeValue := outcomeFor(skill, success)
+	cooldown := 0
+	if !success {
+		cooldown = CooldownSeconds
+	}
+
 	return Result{
 		Skill:            skill,
 		D20:              d20,
@@ -42,17 +108,18 @@ func Roll(character models.Character, skill models.Skill, dc int) Result {
 		Total:            total,
 		DC:               dc,
 		Proficient:       proficient,
-		Success:          total >= dc,
+		Success:          success,
+		Outcome:          outcome,
+		OutcomeValue:     outcomeValue,
+		CooldownSeconds:  cooldown,
 	}
 }
 
-// DCFor picks a difficulty class for a contextual non-combat action. Boss
-// rooms are tuned a little harder — the stakes (and the foe's cunning) are
-// higher right before the final fight.
+// DCFor picks a difficulty class for a contextual non-combat action.
 func DCFor(roomType models.DungeonRoomType, context string) int {
 	dc, ok := baseDC[context]
 	if !ok {
-		dc = 12 // a moderate SRD-typical DC as the default for an unrecognized context
+		dc = 12
 	}
 	if roomType == models.RoomBoss {
 		dc += 3

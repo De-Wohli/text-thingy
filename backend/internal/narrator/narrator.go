@@ -161,17 +161,58 @@ func DungeonResolved(characterName string, goldAwarded int) string {
 	})
 }
 
-// SkillCheckOutcome narrates the result of a non-combat ability check.
+// SkillCheckOutcome narrates a non-combat ability check (basic version,
+// without knowing the specific mechanical outcome). Prefer SkillCheckOutcomeDetailed.
 func SkillCheckOutcome(characterName, context string, success bool) string {
+	return SkillCheckOutcomeDetailed(characterName, "", "", 0, success)
+}
+
+// SkillCheckOutcomeDetailed narrates a non-combat ability check incorporating
+// the specific mechanical outcome so the GM description matches what happened.
+func SkillCheckOutcomeDetailed(characterName, skill, outcome string, outcomeValue int, success bool) string {
+	switch outcome {
+	case "monster_removed":
+		return pick([]string{
+			fmt.Sprintf("%s searches carefully and spots a hidden threat — one enemy won't make it to the fight.", characterName),
+			fmt.Sprintf("Good eyes. %s's investigation removes one of the threats before it can spring.", characterName),
+		})
+	case "player_first":
+		return pick([]string{
+			fmt.Sprintf("%s hears movement in time. The party will act before anything else can.", characterName),
+			fmt.Sprintf("Quiet listening pays off — %s gives the signal, and the party moves first.", characterName),
+		})
+	case "sneak_attack":
+		return pick([]string{
+			fmt.Sprintf("%s slips forward undetected and lands a free strike before the fight even begins.", characterName),
+			fmt.Sprintf("The shadows work in %s's favour — a free attack before initiative is rolled.", characterName),
+		})
+	case "attack_bonus":
+		return fmt.Sprintf("%s reads the enemy's posture and stance — the party fights with +%d to attack rolls this encounter.", characterName, outcomeValue)
+	case "damage_bonus":
+		return fmt.Sprintf("%s identifies a vulnerability. The party deals +%d damage on every hit.", characterName, outcomeValue)
+	case "temp_hp":
+		return fmt.Sprintf("%s braces and centres — everyone nearby gains %d temporary HP going into the fight.", characterName, outcomeValue)
+	case "trap_damage":
+		return pick([]string{
+			fmt.Sprintf("A wire snaps under %s's boot. A hidden trap fires — %d damage.", characterName, outcomeValue),
+			fmt.Sprintf("The search goes wrong. %s triggers a trap for %d damage.", characterName, outcomeValue),
+		})
+	case "monster_ready":
+		return pick([]string{
+			fmt.Sprintf("Something gives %s away. The enemy is ready — they'll have an edge on the first round.", characterName),
+			fmt.Sprintf("The monsters heard %s coming. They'll strike harder in the opening round.", characterName),
+		})
+	}
+	// Generic fallback
 	if success {
 		return pick([]string{
-			fmt.Sprintf("%s's instincts pay off — they spot what others would have missed while they %s.", characterName, context),
-			fmt.Sprintf("A careful eye serves %s well; the attempt to %s succeeds.", characterName, context),
+			fmt.Sprintf("%s's instincts pay off.", characterName),
+			fmt.Sprintf("A careful approach serves %s well.", characterName),
 		})
 	}
 	return pick([]string{
-		fmt.Sprintf("%s tries to %s, but finds nothing useful this time.", characterName, context),
-		fmt.Sprintf("Nothing comes of it — %s's attempt to %s turns up empty.", characterName, context),
+		fmt.Sprintf("%s finds nothing useful this time.", characterName),
+		fmt.Sprintf("Nothing comes of the attempt — %s comes up empty.", characterName),
 	})
 }
 

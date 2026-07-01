@@ -77,6 +77,9 @@ export type GameState = {
   activeEncounter: EncounterState | null
   lastRoomResolution: RoomResolution | null
   lastSkillCheck: { result: SkillCheckResultData; narration: string } | null
+  // skillCooldowns maps skill name to the Unix-ms timestamp when the cooldown expires.
+  // A failed check populates this; ActionsPanel reads it to grey out buttons.
+  skillCooldowns: Record<string, number>
   lastMessage: string | null
 }
 
@@ -103,6 +106,7 @@ export function createInitialState(): GameState {
     activeEncounter: null,
     lastRoomResolution: null,
     lastSkillCheck: null,
+    skillCooldowns: {},
     lastMessage: null,
   }
 }

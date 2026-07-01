@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,11 +211,50 @@ func (s *server) handleStartEncounter(ctx context.Context, client *chat.Client, 
 	characters := s.partyCharacters(ctx, presentIDs)
 
 	s.dungeonsMu.Lock()
-	run.ActiveEncounter = combat.NewEncounter(characters, monsters)
+	// Consume any deferred skill-check modifiers for this room.
+	roomLabel := p.RoomLabel
+	if roomLabel == "" && room != nil {
+		roomLabel = room.Label
+	}
+	mod := run.RoomModifiers[roomLabel]
+	delete(run.RoomModifiers, roomLabel)
+
+	var opts *combat.EncounterOptions
+	if mod != nil {
+		opts = &combat.EncounterOptions{
+			PlayerInitiativeBonus: mod.PlayerInitiativeBonus,
+			PlayerAttackBonus:     mod.PlayerAttackBonus,
+			PlayerDamageBonus:     mod.PlayerDamageBonus,
+			MonsterAlertBonus:     mod.MonsterAlertBonus,
+		}
+	}
+
+	run.ActiveEncounter = combat.NewEncounter(characters, monsters, opts)
 	run.ActiveRoomType = p.RoomType
 	run.ActiveRoomLabel = p.RoomLabel
 	state := encounterStateMessage(run)
 	s.dungeonsMu.Unlock()
+
+	// Apply temp-HP to present characters immediately (before combat starts).
+	if mod != nil && mod.PlayerTempHP > 0 {
+		for _, accountID := range presentIDs {
+			acc, err := s.store.GetAccount(ctx, accountID)
+			if err != nil || acc.ActiveCharacterID == nil {
+				continue
+			}
+			c, err := s.store.GetCharacter(ctx, *acc.ActiveCharacterID)
+			if err != nil {
+				continue
+			}
+			if c.HPCurrent < c.HPMax {
+				newHP := c.HPCurrent + mod.PlayerTempHP
+				if newHP > c.HPMax {
+					newHP = c.HPMax
+				}
+				_ = s.store.UpdateCharacterHP(ctx, c.ID, newHP)
+			}
+		}
+	}
 
 	monsterNames := make([]string, len(monsters))
 	for i, m := range monsters {
@@ -224,6 +264,20 @@ func (s *server) handleStartEncounter(ctx context.Context, client *chat.Client, 
 	line := narrator.RoomEntry(roomDesc, monsterNames)
 	s.sendNarrationToAccounts(presentIDs, line)
 	s.hub.BroadcastToAccounts(presentIDs, state)
+
+	// Sneak attack: the player whose Stealth succeeded gets a free strike
+	// before initiative is handed to the table.
+	if mod != nil && mod.SneakAttack {
+		for _, accountID := range presentIDs {
+			acc, err := s.store.GetAccount(ctx, accountID)
+			if err != nil || acc.ActiveCharacterID == nil {
+				continue
+			}
+			// Fire a single free attack from this character, then broadcast.
+			_ = s.applyCombatAction(ctx, key, accountID, *acc.ActiveCharacterID, "attack", "")
+			break // only one free strike
+		}
+	}
 
 	s.scheduleCombatTimeout(key)
 	return nil
@@ -442,10 +496,15 @@ func (s *server) scheduleCombatTimeout(key string) {
 	})
 }
 
-// handleSkillCheck rolls a non-combat ability check for the sender's
-// active character. A successful pre-combat check removes the room's
-// weakest monster from the fight about to start — a clear, easy-to-narrate
-// consequence rather than extra state bookkeeping.
+// cooldownKey builds the map key for a skill-check cooldown entry.
+func cooldownKey(accountID string, skill models.Skill, roomLabel string) string {
+	return accountID + ":" + string(skill) + ":" + roomLabel
+}
+
+// handleSkillCheck rolls a non-combat ability check with real mechanical
+// consequences (see internal/skillcheck for the outcome table) and
+// enforces a per-skill-per-room cooldown on failed checks so players
+// can't spam the same roll until they get lucky.
 func (s *server) handleSkillCheck(ctx context.Context, client *chat.Client, payload json.RawMessage) error {
 	var p wsproto.SkillCheckPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
@@ -470,28 +529,53 @@ func (s *server) handleSkillCheck(ctx context.Context, client *chat.Client, payl
 		s.dungeonsMu.Unlock()
 		return wsError("there is nothing here to check")
 	}
-	var activeRoomType models.DungeonRoomType
-	for _, room := range run.Dungeon.Rooms {
-		if !room.Cleared {
-			activeRoomType = room.Type
+
+	// Find the first uncleared room (the one the party is about to fight).
+	var activeRoom *models.DungeonRoom
+	var encounterIdx int = -1
+	for i := range run.Dungeon.Rooms {
+		if !run.Dungeon.Rooms[i].Cleared {
+			activeRoom = &run.Dungeon.Rooms[i]
+			encounterIdx = i
 			break
 		}
 	}
-	encounterIdx := -1
-	for i, e := range run.Dungeon.Encounters {
-		if e.RoomType == activeRoomType {
-			encounterIdx = i
-		}
+	if activeRoom == nil {
+		s.dungeonsMu.Unlock()
+		return wsError("all rooms are already cleared")
+	}
+
+	// Cooldown check: prevent re-rolling a failed skill in the same room.
+	ck := cooldownKey(client.AccountID, p.Skill, activeRoom.Label)
+	if until, cooling := run.SkillCooldowns[ck]; cooling && time.Now().Before(until) {
+		remaining := int(time.Until(until).Seconds()) + 1
+		s.dungeonsMu.Unlock()
+		return wsError(fmt.Sprintf("you already tried that — wait %ds before rolling %s again", remaining, p.Skill))
 	}
 	s.dungeonsMu.Unlock()
 
-	dc := skillcheck.DCFor(activeRoomType, p.Context)
+	dc := skillcheck.DCFor(activeRoom.Type, p.Context)
 	result := skillcheck.Roll(character, p.Skill, dc)
-	line := narrator.SkillCheckOutcome(character.Name, p.Context, result.Success)
+	line := narrator.SkillCheckOutcomeDetailed(character.Name, string(p.Skill), string(result.Outcome), result.OutcomeValue, result.Success)
 
-	if result.Success && encounterIdx != -1 {
-		s.dungeonsMu.Lock()
-		if run, ok := s.dungeons[key]; ok && encounterIdx < len(run.Dungeon.Encounters) {
+	s.dungeonsMu.Lock()
+	run, ok = s.dungeons[key]
+	if !ok {
+		s.dungeonsMu.Unlock()
+		s.sendNarration(client.AccountID, client.PartyID, line)
+		return client.WriteJSON(wsproto.SkillCheckResult{Type: "SKILL_CHECK_RESULT", Result: result, Narration: line})
+	}
+
+	if !result.Success {
+		// Set cooldown on the run so the player can't immediately retry.
+		run.SkillCooldowns[ck] = time.Now().Add(time.Duration(skillcheck.CooldownSeconds) * time.Second)
+	}
+
+	// Apply the outcome.
+	switch result.Outcome {
+	case skillcheck.OutcomeMonsterRemoved:
+		// Strip the weakest monster from the upcoming encounter.
+		if encounterIdx >= 0 && encounterIdx < len(run.Dungeon.Encounters) {
 			monsters := run.Dungeon.Encounters[encounterIdx].Monsters
 			if len(monsters) > 0 {
 				weakest := 0
@@ -500,14 +584,72 @@ func (s *server) handleSkillCheck(ctx context.Context, client *chat.Client, payl
 						weakest = i
 					}
 				}
-				run.Dungeon.Encounters[encounterIdx].Monsters = append(monsters[:weakest], monsters[weakest+1:]...)
+				run.Dungeon.Encounters[encounterIdx].Monsters = append(monsters[:weakest:weakest], monsters[weakest+1:]...)
 			}
 		}
-		s.dungeonsMu.Unlock()
+
+	case skillcheck.OutcomePlayerFirst:
+		// Deferred: players get +N initiative when the encounter is built.
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].PlayerInitiativeBonus = result.OutcomeValue
+
+	case skillcheck.OutcomeSneakAttack:
+		// Deferred: grant one free player attack before initiative rolls.
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].SneakAttack = true
+
+	case skillcheck.OutcomeAttackBonus:
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].PlayerAttackBonus = result.OutcomeValue
+
+	case skillcheck.OutcomeDamageBonus:
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].PlayerDamageBonus = result.OutcomeValue
+
+	case skillcheck.OutcomeTempHP:
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].PlayerTempHP = result.OutcomeValue
+
+	case skillcheck.OutcomeMonsterReady:
+		// Deferred: monsters get a first-round attack bonus.
+		if run.RoomModifiers[activeRoom.Label] == nil {
+			run.RoomModifiers[activeRoom.Label] = &roomCombatModifier{}
+		}
+		run.RoomModifiers[activeRoom.Label].MonsterAlertBonus = result.OutcomeValue
+	}
+	s.dungeonsMu.Unlock()
+
+	// OutcomeTrapDamage is immediate: deal 1d4 to the active character.
+	if result.Outcome == skillcheck.OutcomeTrapDamage && result.OutcomeValue > 0 {
+		newHP := character.HPCurrent - result.OutcomeValue
+		if newHP < 1 {
+			newHP = 1
+		}
+		_ = s.store.UpdateCharacterHP(ctx, character.ID, newHP)
 	}
 
 	s.sendNarration(client.AccountID, client.PartyID, line)
-	return client.WriteJSON(wsproto.SkillCheckResult{Type: "SKILL_CHECK_RESULT", Result: result, Narration: line})
+	if err := client.WriteJSON(wsproto.SkillCheckResult{Type: "SKILL_CHECK_RESULT", Result: result, Narration: line}); err != nil {
+		return err
+	}
+	// Send updated character state so the frontend reflects trap damage.
+	if result.Outcome == skillcheck.OutcomeTrapDamage {
+		sync, err := s.stateSync(ctx, client.AccountID)
+		if err == nil {
+			return client.WriteJSON(sync)
+		}
+	}
+	return nil
 }
 
 func (s *server) handleResolveDungeon(ctx context.Context, client *chat.Client) error {
